@@ -233,8 +233,8 @@ export function AppearanceSettings() {
         <div className="flex items-center gap-3">
           <Columns3 size={14} className={kanbanVisible ? 'text-primary' : 'text-muted-foreground'} aria-hidden="true" />
           <div className="flex flex-col">
-            <span className="text-sm font-medium text-foreground" id="kanban-label">Show workspace tasks</span>
-            <span className="text-xs text-muted-foreground">Toggle the Kanban view inside the workspace tabs.</span>
+            <span className="text-sm font-medium text-foreground" id="kanban-label">Show local tasks</span>
+            <span className="text-xs text-muted-foreground">Keep Nerve's local Kanban view available in navigation.</span>
           </div>
         </div>
         <Switch

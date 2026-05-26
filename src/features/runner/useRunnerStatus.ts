@@ -9,6 +9,110 @@ export interface RunnerProbeCommand {
   error?: string;
 }
 
+export interface RunnerWorkItem {
+  id: string;
+  title: string;
+  url?: string;
+  project?: {
+    id?: string;
+    name?: string;
+    url?: string;
+    state?: string;
+  };
+  parent?: {
+    id: string;
+    title?: string;
+  };
+  assignee?: string;
+  priority?: number;
+  state: {
+    name: string;
+    type?: string;
+  };
+  cycle?: {
+    id?: string;
+    name?: string;
+    number?: number;
+    startsAt?: string;
+    endsAt?: string;
+    completedAt?: string | null;
+  };
+  runner: {
+    status: string;
+    claimStatus?: string;
+    runId?: string;
+    workerRoute?: string;
+    workerStatus?: string;
+    validation?: string;
+    workflowHash?: string;
+    lastRunAt?: string;
+    lastEventAt?: string;
+    lastEventType?: string;
+    source: 'runner_db' | 'linear';
+  };
+  updatedAt?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface RunnerRunSummary {
+  runId: string;
+  taskId: string;
+  status: string;
+  claimStatus?: string;
+  workerRoute?: string;
+  workerStatus?: string;
+  validation?: string;
+  refusalCode?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  durationMs: number;
+  eventType?: string;
+}
+
+export interface RunnerWorkDigest {
+  ok: boolean;
+  observedAt: string;
+  source: {
+    runnerDb: boolean;
+    linear: {
+      ok: boolean;
+      project: string;
+      stale?: boolean;
+      error?: string;
+    };
+  };
+  summary: {
+    activeExecutions: number;
+    reviewRuns: number;
+    observedTasks: number;
+    activeLinearIssues: number;
+    projects: number;
+    lastEventAt: string | null;
+  };
+  projects: Array<{
+    id: string;
+    name: string;
+    url?: string;
+    state?: string;
+    active: number;
+    review: number;
+    total: number;
+    completed: number;
+  }>;
+  items: RunnerWorkItem[];
+  recentRuns: RunnerRunSummary[];
+  flow: Array<{
+    date: string;
+    claimed: number;
+    launched: number;
+    review: number;
+    validated: number;
+    blocked: number;
+    total: number;
+  }>;
+}
+
 export interface RunnerStatusReport {
   ok: boolean;
   observedAt: string;
@@ -88,6 +192,7 @@ export interface RunnerStatusReport {
       }>;
     };
   } | null;
+  work: RunnerWorkDigest | null;
   liveDbPath: string;
   safety: {
     dashboardMutations: 0;

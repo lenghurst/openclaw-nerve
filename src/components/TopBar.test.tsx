@@ -25,7 +25,7 @@ function renderTopBar(props: Partial<React.ComponentProps<typeof TopBar>> = {}) 
 }
 
 describe('TopBar', () => {
-  it('shows the tasks view toggle by default', () => {
+  it('shows the tasks view toggle when enabled', () => {
     renderTopBar();
 
     expect(screen.getByRole('button', { name: /switch to tasks view/i })).toBeInTheDocument();

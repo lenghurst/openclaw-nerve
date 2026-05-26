@@ -162,7 +162,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   });
   const [kanbanVisible, setKanbanVisible] = useState(() => {
     const saved = localStorage.getItem(KANBAN_VISIBILITY_STORAGE_KEY);
-    return saved !== 'false';
+    return saved === 'true';
   });
   const { speak } = useTTS(soundEnabled, ttsProvider, ttsModel || undefined);
   const wakeWordToggleRef = useRef<(() => void) | null>(null);
