@@ -75,6 +75,20 @@ export interface RunnerStatusReport {
       next_required_action?: string;
     };
   } | null;
+  authoritySnapshot: {
+    ok?: boolean;
+    authority_snapshot?: {
+      schema_version?: string;
+      authority?: string;
+      verifications?: Record<string, {
+        status?: string;
+        source?: string;
+        path?: string;
+        details?: Record<string, unknown>;
+      }>;
+    };
+  } | null;
+  liveDbPath: string;
   safety: {
     dashboardMutations: 0;
     liveDispatchEnabled: false;

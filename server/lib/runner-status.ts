@@ -24,6 +24,8 @@ export interface RunnerStatusReport {
   doctor: JsonRecord | null;
   scan: JsonRecord | null;
   liveReadiness: JsonRecord | null;
+  authoritySnapshot: JsonRecord | null;
+  liveDbPath: string;
   safety: {
     dashboardMutations: 0;
     liveDispatchEnabled: false;
@@ -37,12 +39,14 @@ export interface RunnerStatusReport {
     runnerDoctor?: CommandResult;
     runnerScan?: CommandResult;
     runnerLiveReadiness?: CommandResult;
+    runnerAuthoritySnapshot?: CommandResult;
   };
   error?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 2500;
 const DEFAULT_MAX_BUFFER = 96 * 1024;
+const DEFAULT_LIVE_DB_PATH = '/home/ubuntu/.local/state/openclaw-runner/runnerd.sqlite';
 
 function scrubbedEnv(repoPath: string): NodeJS.ProcessEnv {
   return {
@@ -133,6 +137,7 @@ function singleLine(result: CommandResult): string | null {
 export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
   const repo = await findRunnerRepo();
   const observedAt = new Date().toISOString();
+  const liveDbPath = process.env.RUNNERD_DB_PATH?.trim() || DEFAULT_LIVE_DB_PATH;
 
   if (!repo.repoPath) {
     return {
@@ -145,6 +150,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
       doctor: null,
       scan: null,
       liveReadiness: null,
+      authoritySnapshot: null,
+      liveDbPath,
       safety: {
         dashboardMutations: 0,
         liveDispatchEnabled: false,
@@ -156,20 +163,22 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     };
   }
 
-  const [gitBranch, gitHead, runnerStatus, runnerDoctor, runnerScan, runnerLiveReadiness] = await Promise.all([
+  const [gitBranch, gitHead, runnerStatus, runnerDoctor, runnerScan, runnerLiveReadiness, runnerAuthoritySnapshot] = await Promise.all([
     execFileJson('git', ['branch', '--show-current'], repo.repoPath),
     execFileJson('git', ['rev-parse', 'HEAD'], repo.repoPath),
-    execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json'], repo.repoPath),
-    execFileJson('python3', ['-m', 'runnerd.cli', 'doctor', '--json'], repo.repoPath),
-    execFileJson('python3', ['-m', 'runnerd.cli', 'scan', '--dry-run', '--json'], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json', '--db', liveDbPath], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'doctor', '--strict', '--json', '--db', liveDbPath], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'scan', '--dry-run', '--json', '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'live-readiness', '--json'], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'live', 'authority', 'snapshot', '--json'], repo.repoPath),
   ]);
 
   const ok = Boolean(
     runnerStatus.ok && runnerStatus.json
     && runnerDoctor.ok && runnerDoctor.json
     && runnerScan.ok && runnerScan.json
-    && runnerLiveReadiness.ok && runnerLiveReadiness.json,
+    && runnerLiveReadiness.ok && runnerLiveReadiness.json
+    && runnerAuthoritySnapshot.ok && runnerAuthoritySnapshot.json,
   );
 
   return {
@@ -182,6 +191,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     doctor: runnerDoctor.json ?? null,
     scan: runnerScan.json ?? null,
     liveReadiness: runnerLiveReadiness.json ?? null,
+    authoritySnapshot: runnerAuthoritySnapshot.json ?? null,
+    liveDbPath,
     safety: {
       dashboardMutations: 0,
       liveDispatchEnabled: false,
@@ -189,10 +200,11 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
       commands: [
         'git branch --show-current',
         'git rev-parse HEAD',
-        'python3 -m runnerd.cli status --json',
-        'python3 -m runnerd.cli doctor --json',
-        'python3 -m runnerd.cli scan --dry-run --json',
+        `python3 -m runnerd.cli status --json --db ${liveDbPath}`,
+        `python3 -m runnerd.cli doctor --strict --json --db ${liveDbPath}`,
+        `python3 -m runnerd.cli scan --dry-run --json --db ${liveDbPath}`,
         'python3 -m runnerd.cli live-readiness --json',
+        'python3 -m runnerd.cli live authority snapshot --json',
       ],
     },
     commands: {
@@ -202,6 +214,7 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
       runnerDoctor,
       runnerScan,
       runnerLiveReadiness,
+      runnerAuthoritySnapshot,
     },
     error: ok ? undefined : 'runnerd local status probe failed',
   };

@@ -27,12 +27,13 @@ The endpoint runs only bounded local probes:
 
 - `git branch --show-current`
 - `git rev-parse HEAD`
-- `python3 -m runnerd.cli status --json`
-- `python3 -m runnerd.cli doctor --json`
-- `python3 -m runnerd.cli scan --dry-run --json`
+- `python3 -m runnerd.cli status --json --db <configured-live-db-path>`
+- `python3 -m runnerd.cli doctor --strict --json --db <configured-live-db-path>`
+- `python3 -m runnerd.cli scan --dry-run --json --db <configured-live-db-path>`
 - `python3 -m runnerd.cli live-readiness --json`
+- `python3 -m runnerd.cli live authority snapshot --json`
 
-The response includes branch/head metadata, runner status, doctor output, dry-run scan output, live-readiness gate output, command success/failure metadata, and an explicit safety block.
+The response includes branch/head metadata, the live DB path used for read-only probes, runner status, strict doctor output, dry-run scan output, live-readiness gate output, host authority snapshot output, command success/failure metadata, and an explicit safety block.
 
 ## Safety Requirements
 
@@ -52,6 +53,7 @@ Inside the view:
 - A header mirrors `KanbanHeader`: `cockpit-kicker`, `h1`, compact status chips, right-aligned refresh button, and bottom border.
 - Summary tiles show mode, dry-run scan, DB health, and branch/head.
 - Readiness gates are rendered as compact Nerve cards using status chips derived from `live_readiness.gate_chips`.
+- Authority snapshot rows show observed service, DB, kill switch, credential-reference, worker, evidence, writeback, rollback, and approval-record state without exposing secret values.
 - Safety and command probes are secondary panels using `cockpit-note`, `shell-panel`, mono command text, and existing green/orange/destructive tones.
 - Raw JSON is available for auditability but visually secondary.
 
@@ -62,6 +64,7 @@ Inside the view:
 - `/api/runner/status` works in a local Hono probe and returns no mutations.
 - The frontend bundle contains the Runner route and fetches `/api/runner/status`.
 - Playwright visual checks confirm the Runner button and panel render at desktop and mobile widths without overlap.
+- DB health is read from the configured live DB path, while live-readiness remains the source of truth for whether that DB proof can count toward live activation.
 - Hosted deployment, if performed, preserves OAuth protection on `https://oliver-longhurst.co.uk`.
 
 ## Current OpenClaw Test Posture

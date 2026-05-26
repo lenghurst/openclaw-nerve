@@ -112,6 +112,30 @@ function SafetyRow({ label, ok }: { label: string; ok: boolean }) {
   );
 }
 
+function AuthorityRow({
+  label,
+  status,
+  source,
+}: {
+  label: string;
+  status?: string;
+  source?: string;
+}) {
+  const ok = status === 'pass';
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2.5 last:border-b-0">
+      <div className="min-w-0">
+        <div className="truncate text-sm text-foreground/86">{label.replace(/_/g, ' ')}</div>
+        <div className="mt-0.5 truncate font-mono text-[0.667rem] text-muted-foreground">{source || 'not observed'}</div>
+      </div>
+      <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.12em] ${toneClass(ok ? 'safe' : 'danger')}`}>
+        {ok ? <CheckCircle2 size={12} aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />}
+        {status || 'unknown'}
+      </span>
+    </div>
+  );
+}
+
 function GateCard({
   id,
   state,
@@ -151,6 +175,8 @@ export function RunnerPanel() {
   const findings = data?.doctor?.findings || [];
   const readiness = data?.liveReadiness?.live_readiness;
   const gateChips = readiness?.gate_chips || [];
+  const authorityVerifications = data?.authoritySnapshot?.authority_snapshot?.verifications || {};
+  const authorityRows = Object.entries(authorityVerifications);
   const commands = useMemo(() => Object.values(data?.commands || {}).filter(Boolean), [data?.commands]);
   const dryRunClear = data?.scan?.dry_run === true
     && (data?.scan?.claims_created ?? 0) === 0
@@ -220,7 +246,7 @@ export function RunnerPanel() {
             <SummaryTile
               icon={<Database size={14} aria-hidden="true" />}
               label="DB health"
-              value={dbHealth?.status || 'unknown'}
+              value={`${dbHealth?.status || 'unknown'} / ${data?.liveDbPath || 'no path'}`}
               tone={dbHealth?.healthy ? 'safe' : 'warning'}
             />
             <SummaryTile
@@ -283,28 +309,21 @@ export function RunnerPanel() {
             <section className="shell-panel overflow-hidden rounded-[24px]">
               <div className="border-b border-border/60 bg-secondary/24 px-3 py-2.5">
                 <div className="cockpit-kicker text-[0.6rem]">
-                  <TerminalSquare size={12} className="text-primary" aria-hidden="true" />
-                  Probe commands
+                  <ShieldCheck size={12} className="text-primary" aria-hidden="true" />
+                  Authority snapshot
                 </div>
               </div>
               <div className="divide-y divide-border/50">
-                {commands.length === 0 ? (
-                  <div className="px-3 py-4 text-sm text-muted-foreground">No probe commands have run.</div>
+                {authorityRows.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-muted-foreground">No authority snapshot observed.</div>
                 ) : (
-                  commands.map((command, index) => (
-                    <div key={`${command?.command.join(' ')}-${index}`} className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className={`inline-flex size-7 items-center justify-center rounded-xl border ${toneClass(command?.ok ? 'safe' : 'danger')}`}>
-                          <TerminalSquare size={12} aria-hidden="true" />
-                        </span>
-                        <code className="min-w-0 flex-1 truncate text-[0.733rem] text-foreground/88">
-                          {command?.command.join(' ')}
-                        </code>
-                      </div>
-                      {!command?.ok && (
-                        <div className="mt-1 text-xs text-destructive">{command?.error || command?.stderr || 'Command failed'}</div>
-                      )}
-                    </div>
+                  authorityRows.map(([key, value]) => (
+                    <AuthorityRow
+                      key={key}
+                      label={key}
+                      status={value.status}
+                      source={value.source}
+                    />
                   ))
                 )}
               </div>
@@ -314,11 +333,41 @@ export function RunnerPanel() {
           <section className="shell-panel overflow-hidden rounded-[24px]">
             <div className="border-b border-border/60 bg-secondary/24 px-3 py-2.5">
               <div className="cockpit-kicker text-[0.6rem]">
+                <TerminalSquare size={12} className="text-primary" aria-hidden="true" />
+                Probe commands
+              </div>
+            </div>
+            <div className="divide-y divide-border/50">
+              {commands.length === 0 ? (
+                <div className="px-3 py-4 text-sm text-muted-foreground">No probe commands have run.</div>
+              ) : (
+                commands.map((command, index) => (
+                  <div key={`${command?.command.join(' ')}-${index}`} className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex size-7 items-center justify-center rounded-xl border ${toneClass(command?.ok ? 'safe' : 'danger')}`}>
+                        <TerminalSquare size={12} aria-hidden="true" />
+                      </span>
+                      <code className="min-w-0 flex-1 truncate text-[0.733rem] text-foreground/88">
+                        {command?.command.join(' ')}
+                      </code>
+                    </div>
+                    {!command?.ok && (
+                      <div className="mt-1 text-xs text-destructive">{command?.error || command?.stderr || 'Command failed'}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="shell-panel overflow-hidden rounded-[24px]">
+            <div className="border-b border-border/60 bg-secondary/24 px-3 py-2.5">
+              <div className="cockpit-kicker text-[0.6rem]">
                 <FileCheck2 size={12} className="text-primary" aria-hidden="true" />
                 Runner report
               </div>
             </div>
-            <div className="grid gap-0 divide-y divide-border/50 xl:grid-cols-4 xl:divide-x xl:divide-y-0">
+            <div className="grid gap-0 divide-y divide-border/50 xl:grid-cols-5 xl:divide-x xl:divide-y-0">
               <pre className="max-h-80 overflow-auto p-3 text-[0.733rem] leading-5 text-foreground/82">
                 {JSON.stringify(data?.status || {}, null, 2)}
               </pre>
@@ -330,6 +379,9 @@ export function RunnerPanel() {
               </pre>
               <pre className="max-h-80 overflow-auto p-3 text-[0.733rem] leading-5 text-foreground/82">
                 {JSON.stringify(readiness || {}, null, 2)}
+              </pre>
+              <pre className="max-h-80 overflow-auto p-3 text-[0.733rem] leading-5 text-foreground/82">
+                {JSON.stringify(data?.authoritySnapshot?.authority_snapshot || {}, null, 2)}
               </pre>
             </div>
           </section>
