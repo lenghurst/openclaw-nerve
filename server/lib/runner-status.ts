@@ -22,6 +22,8 @@ export interface RunnerStatusReport {
   head: string | null;
   status: JsonRecord | null;
   doctor: JsonRecord | null;
+  scan: JsonRecord | null;
+  liveReadiness: JsonRecord | null;
   safety: {
     dashboardMutations: 0;
     liveDispatchEnabled: false;
@@ -33,6 +35,8 @@ export interface RunnerStatusReport {
     gitHead?: CommandResult;
     runnerStatus?: CommandResult;
     runnerDoctor?: CommandResult;
+    runnerScan?: CommandResult;
+    runnerLiveReadiness?: CommandResult;
   };
   error?: string;
 }
@@ -139,6 +143,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
       head: null,
       status: null,
       doctor: null,
+      scan: null,
+      liveReadiness: null,
       safety: {
         dashboardMutations: 0,
         liveDispatchEnabled: false,
@@ -150,14 +156,21 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     };
   }
 
-  const [gitBranch, gitHead, runnerStatus, runnerDoctor] = await Promise.all([
+  const [gitBranch, gitHead, runnerStatus, runnerDoctor, runnerScan, runnerLiveReadiness] = await Promise.all([
     execFileJson('git', ['branch', '--show-current'], repo.repoPath),
     execFileJson('git', ['rev-parse', 'HEAD'], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json'], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'doctor', '--json'], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'scan', '--dry-run', '--json'], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'live-readiness', '--json'], repo.repoPath),
   ]);
 
-  const ok = Boolean(runnerStatus.ok && runnerStatus.json && runnerDoctor.ok && runnerDoctor.json);
+  const ok = Boolean(
+    runnerStatus.ok && runnerStatus.json
+    && runnerDoctor.ok && runnerDoctor.json
+    && runnerScan.ok && runnerScan.json
+    && runnerLiveReadiness.ok && runnerLiveReadiness.json,
+  );
 
   return {
     ok,
@@ -167,6 +180,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     head: singleLine(gitHead),
     status: runnerStatus.json ?? null,
     doctor: runnerDoctor.json ?? null,
+    scan: runnerScan.json ?? null,
+    liveReadiness: runnerLiveReadiness.json ?? null,
     safety: {
       dashboardMutations: 0,
       liveDispatchEnabled: false,
@@ -176,6 +191,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
         'git rev-parse HEAD',
         'python3 -m runnerd.cli status --json',
         'python3 -m runnerd.cli doctor --json',
+        'python3 -m runnerd.cli scan --dry-run --json',
+        'python3 -m runnerd.cli live-readiness --json',
       ],
     },
     commands: {
@@ -183,6 +200,8 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
       gitHead,
       runnerStatus,
       runnerDoctor,
+      runnerScan,
+      runnerLiveReadiness,
     },
     error: ok ? undefined : 'runnerd local status probe failed',
   };

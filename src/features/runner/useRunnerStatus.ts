@@ -39,6 +39,42 @@ export interface RunnerStatusReport {
       details?: string[];
     };
   } | null;
+  scan: {
+    ok?: boolean;
+    decision?: string;
+    dry_run?: boolean;
+    claims_created?: number;
+    launches?: number;
+    mutations?: number;
+  } | null;
+  liveReadiness: {
+    ok?: boolean;
+    live_readiness?: {
+      status?: string;
+      state?: string;
+      live_ready?: boolean;
+      blocker_count?: number;
+      why_blocked?: string[];
+      gate_chips?: Array<{
+        id: string;
+        state: string;
+        evidence?: string;
+        why_blocked?: string;
+      }>;
+      service_state?: {
+        active?: string;
+        enabled?: string;
+      };
+      kill_switch_state?: {
+        active?: boolean;
+        valid?: boolean;
+        reason?: string;
+        source?: string;
+      };
+      reviewed_git_head?: string;
+      next_required_action?: string;
+    };
+  } | null;
   safety: {
     dashboardMutations: 0;
     liveDispatchEnabled: false;

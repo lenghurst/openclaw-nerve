@@ -30,6 +30,8 @@ describe('GET /api/runner/status', () => {
       head: 'abc123',
       status: { ok: true, mode: 'disabled', mutations: 0 },
       doctor: { ok: true, mutations: 0 },
+      scan: { ok: true, dry_run: true, claims_created: 0, launches: 0, mutations: 0 },
+      liveReadiness: { ok: false, live_readiness: { status: 'blocked_live', live_ready: false } },
       safety: {
         dashboardMutations: 0,
         liveDispatchEnabled: false,
@@ -59,6 +61,8 @@ describe('GET /api/runner/status', () => {
       head: null,
       status: null,
       doctor: null,
+      scan: null,
+      liveReadiness: null,
       safety: {
         dashboardMutations: 0,
         liveDispatchEnabled: false,

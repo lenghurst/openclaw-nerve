@@ -196,14 +196,14 @@ export function createCommands(actions: CommandActions): Command[] {
         id: 'open-chat',
         label: 'Open Chat View',
         action: () => actions.onSetViewMode!('chat'),
-        category: 'kanban' as const,
+        category: 'navigation' as const,
         keywords: ['chat', 'conversation', 'view'],
       },
       {
         id: 'open-runner',
         label: 'Open Runner View',
         action: () => actions.onSetViewMode!('runner'),
-        category: 'kanban' as const,
+        category: 'navigation' as const,
         keywords: ['runner', 'runnerd', 'status', 'doctor', 'view'],
       },
       ...(actions.canShowKanban !== false ? [
@@ -211,7 +211,7 @@ export function createCommands(actions: CommandActions): Command[] {
           id: 'open-kanban',
           label: 'Open Tasks View',
           action: () => actions.onSetViewMode!('kanban'),
-          category: 'kanban' as const,
+          category: 'navigation' as const,
           keywords: ['kanban', 'board', 'tasks', 'view'],
         },
         {
