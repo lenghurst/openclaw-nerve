@@ -3,7 +3,7 @@ import { themes, type ThemeName } from '@/lib/themes';
 import { fonts, type FontName } from '@/lib/fonts';
 import type { TTSProvider } from '@/features/tts/useTTS';
 
-export type ViewMode = 'chat' | 'kanban';
+export type ViewMode = 'chat' | 'kanban' | 'runner';
 
 export interface CommandActions {
   onNewSession: () => void;
@@ -190,15 +190,8 @@ export function createCommands(actions: CommandActions): Command[] {
       category: 'voice',
       keywords: ['wake', 'voice', 'microphone', 'hey'],
     },
-    // Kanban commands
-    ...(actions.onSetViewMode && actions.canShowKanban !== false ? [
-      {
-        id: 'open-kanban',
-        label: 'Open Tasks View',
-        action: () => actions.onSetViewMode!('kanban'),
-        category: 'kanban' as const,
-        keywords: ['kanban', 'board', 'tasks', 'view'],
-      },
+    // Workspace views
+    ...(actions.onSetViewMode ? [
       {
         id: 'open-chat',
         label: 'Open Chat View',
@@ -207,12 +200,28 @@ export function createCommands(actions: CommandActions): Command[] {
         keywords: ['chat', 'conversation', 'view'],
       },
       {
-        id: 'create-kanban-task',
-        label: 'Create Task',
-        action: () => actions.onSetViewMode!('kanban'),
+        id: 'open-runner',
+        label: 'Open Runner View',
+        action: () => actions.onSetViewMode!('runner'),
         category: 'kanban' as const,
-        keywords: ['kanban', 'task', 'create', 'new', 'add'],
+        keywords: ['runner', 'runnerd', 'status', 'doctor', 'view'],
       },
+      ...(actions.canShowKanban !== false ? [
+        {
+          id: 'open-kanban',
+          label: 'Open Tasks View',
+          action: () => actions.onSetViewMode!('kanban'),
+          category: 'kanban' as const,
+          keywords: ['kanban', 'board', 'tasks', 'view'],
+        },
+        {
+          id: 'create-kanban-task',
+          label: 'Create Task',
+          action: () => actions.onSetViewMode!('kanban'),
+          category: 'kanban' as const,
+          keywords: ['kanban', 'task', 'create', 'new', 'add'],
+        },
+      ] : []),
     ] : []),
     ...themeCommands,
     ...fontCommands,
