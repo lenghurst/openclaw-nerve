@@ -55,6 +55,8 @@ function scrubbedEnv(repoPath: string): NodeJS.ProcessEnv {
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
     PYTHONPATH: repoPath,
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || '',
+    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || '',
   };
 }
 
