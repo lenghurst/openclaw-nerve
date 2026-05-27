@@ -61,6 +61,7 @@ interface RunnerWorkDigest {
 interface RunnerWorkItem {
   id: string;
   title: string;
+  descriptionPreview?: string;
   url?: string;
   project?: {
     id?: string;
@@ -107,6 +108,8 @@ interface RunnerWorkItem {
 interface RunnerRunSummary {
   runId: string;
   taskId: string;
+  title?: string;
+  url?: string;
   status: string;
   claimStatus?: string;
   workerRoute?: string;
@@ -156,6 +159,10 @@ const DEFAULT_LIVE_DB_PATH = '/home/ubuntu/.local/state/openclaw-runner/runnerd.
 const DEFAULT_LINEAR_SECRETS_PATH = '/home/ubuntu/.config/runnerd/secrets.env';
 const DEFAULT_LINEAR_PROJECT = 'runner';
 const LINEAR_TIMEOUT_MS = 2500;
+const DEFAULT_STATUS_CACHE_MS = 10_000;
+
+let cachedStatus: { report: RunnerStatusReport; cachedAt: number } | null = null;
+let pendingStatus: Promise<RunnerStatusReport> | null = null;
 
 const DASHBOARD_SQL_SCRIPT = String.raw`
 import json
@@ -256,6 +263,7 @@ print(json.dumps({
 const LINEAR_ISSUE_FRAGMENT = `
   identifier
   title
+  description
   url
   priority
   updatedAt
@@ -270,22 +278,22 @@ const LINEAR_ISSUE_FRAGMENT = `
 
 const LINEAR_WORK_QUERY = `
 query RunnerDashboardWork($project: String!, $first: Int!) {
-  started: issues(
-    filter: { project: { name: { eq: $project } }, state: { type: { eq: "started" } } }
+  projectIssues: issues(
+    filter: { project: { name: { eq: $project } } }
     first: $first
-    orderBy: updatedAt
-  ) {
-    nodes { ${LINEAR_ISSUE_FRAGMENT} }
-  }
-  unstarted: issues(
-    filter: { project: { name: { eq: $project } }, state: { type: { eq: "unstarted" } } }
-    first: 20
     orderBy: updatedAt
   ) {
     nodes { ${LINEAR_ISSUE_FRAGMENT} }
   }
 }
 `;
+
+function statusCacheMs(): number {
+  const raw = process.env.RUNNERD_DASHBOARD_CACHE_MS?.trim();
+  if (!raw) return DEFAULT_STATUS_CACHE_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_STATUS_CACHE_MS;
+}
 
 function scrubbedEnv(repoPath: string): NodeJS.ProcessEnv {
   return {
@@ -393,6 +401,21 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function descriptionPreview(value: unknown): string | undefined {
+  const text = asString(value);
+  if (!text) return undefined;
+  const cleaned = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]+]\(([^)]+)\)/g, ' ')
+    .replace(/[#>*_[\]-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return undefined;
+  return cleaned.length > 280 ? `${cleaned.slice(0, 277)}...` : cleaned;
+}
+
 function runPythonJson(args: string[], cwd: string, timeout = DEFAULT_TIMEOUT_MS): Promise<CommandResult> {
   return new Promise((resolveCommand) => {
     execFile('python3', args, {
@@ -469,7 +492,7 @@ async function fetchLinearIssues(project: string): Promise<{
       },
       body: JSON.stringify({
         query: LINEAR_WORK_QUERY,
-        variables: { project, first: 40 },
+        variables: { project, first: 80 },
       }),
       signal: controller.signal,
     });
@@ -485,13 +508,10 @@ async function fetchLinearIssues(project: string): Promise<{
     const data = payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
       ? payload.data as JsonRecord
       : {};
-    const started = data.started && typeof data.started === 'object' && !Array.isArray(data.started)
-      ? asArray((data.started as JsonRecord).nodes)
+    const projectIssues = data.projectIssues && typeof data.projectIssues === 'object' && !Array.isArray(data.projectIssues)
+      ? asArray((data.projectIssues as JsonRecord).nodes)
       : [];
-    const unstarted = data.unstarted && typeof data.unstarted === 'object' && !Array.isArray(data.unstarted)
-      ? asArray((data.unstarted as JsonRecord).nodes)
-      : [];
-    return { ok: true, issues: [...started, ...unstarted] };
+    return { ok: true, issues: projectIssues };
   } catch (err) {
     return {
       ok: false,
@@ -524,6 +544,7 @@ function normalizeLinearIssue(issue: JsonRecord): Partial<RunnerWorkItem> & { id
   return {
     id,
     title: asString(issue.title) || id || 'Untitled Linear issue',
+    descriptionPreview: descriptionPreview(issue.description),
     url: asString(issue.url),
     project: {
       id: asString(project.id),
@@ -597,6 +618,28 @@ function statusRank(item: RunnerWorkItem): number {
   return 4;
 }
 
+function isCompletedItem(item?: RunnerWorkItem): boolean {
+  if (!item) return false;
+  const stateName = item.state.name.toLowerCase();
+  return Boolean(
+    item.completedAt
+    || item.state.type === 'completed'
+    || stateName === 'done'
+    || stateName === 'completed'
+    || stateName === 'canceled'
+    || stateName === 'cancelled',
+  );
+}
+
+function isRunnerExecuting(status?: string): boolean {
+  return ['claimed', 'launched', 'validating'].includes((status || '').toLowerCase());
+}
+
+function isPresentWorkItem(item: RunnerWorkItem): boolean {
+  if (isCompletedItem(item)) return false;
+  return isRunnerExecuting(item.runner.status) || item.state.type === 'started';
+}
+
 function buildFlow(events: JsonRecord[]): RunnerWorkDigest['flow'] {
   const byDate = new Map<string, RunnerWorkDigest['flow'][number]>();
   for (const event of events) {
@@ -652,25 +695,31 @@ function buildProjectSummary(items: RunnerWorkItem[]): RunnerWorkDigest['project
       completed: 0,
     };
     current.total += 1;
-    if (item.runner.status === 'review' || item.state.name.toLowerCase().includes('review')) current.review += 1;
-    if (item.runner.status === 'launched' || item.runner.status === 'claimed' || item.state.type === 'started') current.active += 1;
-    if (item.state.type === 'completed' || item.completedAt) current.completed += 1;
+    const completed = isCompletedItem(item);
+    if (!completed && (item.runner.status === 'review' || item.state.name.toLowerCase().includes('review'))) current.review += 1;
+    if (isPresentWorkItem(item)) current.active += 1;
+    if (completed) current.completed += 1;
     projects.set(key, current);
   }
   return [...projects.values()].sort((a, b) => b.active - a.active || b.total - a.total || a.name.localeCompare(b.name));
 }
 
-function buildRecentRunSummaries(runs: JsonRecord[], events: JsonRecord[]): RunnerRunSummary[] {
+function buildRecentRunSummaries(runs: JsonRecord[], events: JsonRecord[], issuesById: Map<string, RunnerWorkItem>): RunnerRunSummary[] {
   const eventByRun = latestEventByRun(events);
   return runs.slice(0, 12).map((run) => {
     const createdMs = asNumber(run.created_at) || 0;
     const updatedMs = asNumber(run.updated_at) || createdMs;
     const runId = asString(run.run_id) || '';
+    const taskId = asString(run.task_id) || '';
     const event = eventByRun.get(runId);
+    const issue = issuesById.get(taskId);
+    const rawStatus = asString(run.status) || 'unknown';
     return {
       runId,
-      taskId: asString(run.task_id) || '',
-      status: asString(run.status) || 'unknown',
+      taskId,
+      title: issue?.title,
+      url: issue?.url,
+      status: rawStatus === 'review' && isCompletedItem(issue) ? 'done' : rawStatus,
       claimStatus: asString(run.claim_status),
       workerRoute: asString(run.worker_route),
       workerStatus: asString(run.worker_status),
@@ -701,6 +750,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     linearItems.set(normalized.id, {
       id: normalized.id,
       title: normalized.title || normalized.id,
+      descriptionPreview: normalized.descriptionPreview,
       url: normalized.url,
       project: normalized.project,
       parent: normalized.parent,
@@ -733,6 +783,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     linearItems.set(taskId, {
       id: taskId,
       title: fallbackTitle,
+      descriptionPreview: existing?.descriptionPreview || descriptionPreview(snapshot.description),
       url: existing?.url || asString(snapshot.url),
       project: fallbackProject,
       parent: existing?.parent,
@@ -768,6 +819,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     linearItems.set(taskId, {
       id: taskId,
       title: asString(snapshot.title) || taskId,
+      descriptionPreview: descriptionPreview(snapshot.description),
       url: asString(snapshot.url),
       project: projectFromSnapshot(snapshot),
       state: snapshotState(snapshot),
@@ -780,12 +832,14 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     });
   }
 
-  const items = [...linearItems.values()].sort((a, b) => statusRank(a) - statusRank(b) || (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-  const projects = buildProjectSummary(items);
-  const recentRuns = buildRecentRunSummaries(runs, events);
+  const allItems = [...linearItems.values()].sort((a, b) => statusRank(a) - statusRank(b) || (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const issuesById = new Map(allItems.map((item) => [item.id, item]));
+  const items = allItems.filter(isPresentWorkItem);
+  const projects = buildProjectSummary(allItems);
+  const recentRuns = buildRecentRunSummaries(runs, events, issuesById);
   const activeExecutions = runs.filter((run) => ['claimed', 'launched', 'validating'].includes(asString(run.status) || '')).length;
-  const reviewRuns = runs.filter((run) => asString(run.status) === 'review').length;
-  const activeLinearIssues = items.filter((item) => item.state.type === 'started').length;
+  const reviewRuns = runs.filter((run) => asString(run.status) === 'review' && !isCompletedItem(issuesById.get(asString(run.task_id) || ''))).length;
+  const activeLinearIssues = allItems.filter((item) => item.state.type === 'started' && !isCompletedItem(item)).length;
   const lastEventAt = asString(events[0]?.created_at_iso) || null;
 
   return {
@@ -802,7 +856,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     summary: {
       activeExecutions,
       reviewRuns,
-      observedTasks: items.length,
+      observedTasks: allItems.length,
       activeLinearIssues,
       projects: projects.length,
       lastEventAt,
@@ -814,7 +868,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
   };
 }
 
-export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
+async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
   const repo = await findRunnerRepo();
   const observedAt = new Date().toISOString();
   const liveDbPath = process.env.RUNNERD_DB_PATH?.trim() || DEFAULT_LIVE_DB_PATH;
@@ -930,4 +984,26 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     },
     error: ok ? undefined : 'runnerd local status probe failed',
   };
+}
+
+export async function collectRunnerStatus(options: { force?: boolean } = {}): Promise<RunnerStatusReport> {
+  const cacheMs = statusCacheMs();
+  const now = Date.now();
+  if (!options.force && cacheMs > 0 && cachedStatus && now - cachedStatus.cachedAt < cacheMs) {
+    return cachedStatus.report;
+  }
+  if (!options.force && pendingStatus) {
+    return pendingStatus;
+  }
+
+  pendingStatus = collectRunnerStatusFresh()
+    .then((report) => {
+      cachedStatus = { report, cachedAt: Date.now() };
+      return report;
+    })
+    .finally(() => {
+      pendingStatus = null;
+    });
+
+  return pendingStatus;
 }

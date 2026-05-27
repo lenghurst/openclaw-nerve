@@ -4,7 +4,8 @@ import { collectRunnerStatus } from '../lib/runner-status.js';
 const app = new Hono();
 
 app.get('/api/runner/status', async (c) => {
-  const status = await collectRunnerStatus();
+  const force = c.req.query('refresh') === '1';
+  const status = await collectRunnerStatus({ force });
   return c.json(status, status.ok ? 200 : 503);
 });
 

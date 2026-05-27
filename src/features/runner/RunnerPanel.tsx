@@ -7,7 +7,6 @@ import {
   Clock3,
   ExternalLink,
   Folder,
-  GitBranch,
   ListChecks,
   RefreshCw,
   Route,
@@ -31,6 +30,7 @@ function toneClass(tone: Tone): string {
 function statusTone(status?: string, stateType?: string): Tone {
   const normalized = (status || '').toLowerCase();
   if (['launched', 'claimed', 'validating'].includes(normalized)) return 'primary';
+  if (normalized === 'done' || normalized === 'completed') return 'safe';
   if (normalized === 'review' || normalized.includes('review')) return 'warning';
   if (stateType === 'started') return 'primary';
   if (stateType === 'completed') return 'safe';
@@ -63,10 +63,6 @@ function formatDuration(ms?: number): string {
   if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
   return `${Math.round(ms / 3_600_000)}h`;
-}
-
-function headLabel(head?: string | null): string {
-  return head ? head.slice(0, 10) : 'unknown';
 }
 
 function readinessLabel(report: RunnerStatusReport | null): { label: string; tone: Tone } {
@@ -170,6 +166,11 @@ function WorkItemRow({ item }: { item: RunnerWorkItem }) {
               <span>{item.title}</span>
             )}
           </div>
+          {item.descriptionPreview && (
+            <p className="mt-1 line-clamp-2 text-[0.733rem] leading-5 text-muted-foreground">
+              {item.descriptionPreview}
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.733rem] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <Folder size={12} aria-hidden="true" />
@@ -227,10 +228,14 @@ function ProjectCard({ project }: { project: NonNullable<RunnerStatusReport['wor
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-secondary">
         <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, progress)}%` }} />
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[0.667rem]">
+      <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[0.667rem]">
         <div className="rounded-2xl border border-border/60 bg-background/48 px-2 py-2">
           <div className="font-semibold text-foreground">{project.total}</div>
-          <div className="text-muted-foreground">Scoped</div>
+          <div className="text-muted-foreground">Total</div>
+        </div>
+        <div className="rounded-2xl border border-border/60 bg-background/48 px-2 py-2">
+          <div className="font-semibold text-foreground">{project.active}</div>
+          <div className="text-muted-foreground">Active</div>
         </div>
         <div className="rounded-2xl border border-border/60 bg-background/48 px-2 py-2">
           <div className="font-semibold text-foreground">{project.review}</div>
@@ -245,38 +250,29 @@ function ProjectCard({ project }: { project: NonNullable<RunnerStatusReport['wor
   );
 }
 
-function FlowChart({ flow }: { flow: NonNullable<RunnerStatusReport['work']>['flow'] }) {
-  const maxTotal = Math.max(1, ...flow.map((item) => item.total));
-
+function FlowSummary({ flow }: { flow: NonNullable<RunnerStatusReport['work']>['flow'] }) {
   if (flow.length === 0) {
     return <div className="cockpit-note m-3 text-sm">No runner execution history captured yet.</div>;
   }
 
   return (
-    <div className="px-3 py-4">
-      <div className="flex h-[190px] items-end gap-2 overflow-x-auto pb-1">
+    <div className="divide-y divide-border/50">
         {flow.map((item) => {
-          const height = Math.max(12, Math.round((item.total / maxTotal) * 150));
-          const claimed = item.total ? (item.claimed / item.total) * 100 : 0;
-          const launched = item.total ? (item.launched / item.total) * 100 : 0;
-          const review = item.total ? (item.review / item.total) * 100 : 0;
           return (
-            <div key={item.date} className="flex min-w-[56px] flex-1 flex-col items-center gap-2">
-              <div className="flex w-full flex-col justify-end rounded-2xl border border-border/60 bg-background/48 p-1" style={{ height }}>
-                <div className="w-full rounded-t-lg bg-green" style={{ height: `${review}%`, minHeight: item.review ? 4 : 0 }} />
-                <div className="w-full bg-orange" style={{ height: `${launched}%`, minHeight: item.launched ? 4 : 0 }} />
-                <div className="w-full rounded-b-lg bg-primary" style={{ height: `${claimed}%`, minHeight: item.claimed ? 4 : 0 }} />
+            <div key={item.date} className="grid grid-cols-[84px_minmax(0,1fr)] gap-3 px-3 py-3 text-[0.733rem]">
+              <div className="min-w-0">
+                <div className="font-mono font-semibold text-foreground">{item.date.slice(5)}</div>
+                <div className="text-muted-foreground">{item.total} events</div>
               </div>
-              <div className="font-mono text-[0.6rem] text-muted-foreground">{item.date.slice(5)}</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <StatusChip icon={<Activity size={12} aria-hidden="true" />} label={`claimed ${item.claimed}`} tone={item.claimed ? 'primary' : 'muted'} />
+                <StatusChip icon={<Zap size={12} aria-hidden="true" />} label={`launched ${item.launched}`} tone={item.launched ? 'primary' : 'muted'} />
+                <StatusChip icon={<CheckCircle2 size={12} aria-hidden="true" />} label={`resolved ${item.review + item.blocked}`} tone={item.review + item.blocked ? 'safe' : 'muted'} />
+                <StatusChip icon={<ListChecks size={12} aria-hidden="true" />} label={`validated ${item.validated}`} tone={item.validated ? 'safe' : 'muted'} />
+              </div>
             </div>
           );
         })}
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.667rem] text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-primary" />Claimed</span>
-        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-orange" />Launched</span>
-        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-green" />Review</span>
-      </div>
     </div>
   );
 }
@@ -290,7 +286,14 @@ function RecentRunRow({ run }: { run: RunnerRunSummary }) {
         <div className="truncate text-muted-foreground">{formatShortTime(run.updatedAt)}</div>
       </div>
       <div className="min-w-0">
-        <div className="truncate text-foreground">{run.workerRoute || 'worker pending'}</div>
+        {run.url ? (
+          <a className="inline-flex min-w-0 items-center gap-1.5 text-foreground hover:text-primary" href={run.url} target="_blank" rel="noreferrer">
+            <span className="truncate">{run.title || run.workerRoute || 'worker completed'}</span>
+            <ExternalLink size={12} className="shrink-0" aria-hidden="true" />
+          </a>
+        ) : (
+          <div className="truncate text-foreground">{run.title || run.workerRoute || 'worker completed'}</div>
+        )}
         <div className="truncate text-muted-foreground">{run.runId}</div>
       </div>
       <div className="justify-self-end">
@@ -310,14 +313,14 @@ function GateSummary({ report }: { report: RunnerStatusReport | null }) {
     <section className="shell-panel overflow-hidden rounded-[24px]">
       <SectionHeader
         icon={<ShieldCheck size={12} className="text-primary" aria-hidden="true" />}
-        kicker="Agent gates"
-        title="Readiness stays available for agents and operators"
+        kicker="Readiness"
+        title="Live activation blockers"
         aside={<StatusChip icon={<ListChecks size={12} aria-hidden="true" />} label={`${passCount}/${gates.length || 0} clear`} tone={blocked.length === 0 && gates.length > 0 ? 'safe' : 'warning'} />}
       />
       <div className="grid gap-2 p-3 sm:grid-cols-2">
         {blocked.length === 0 ? (
           <div className="cockpit-note sm:col-span-2 text-sm">
-            {gates.length === 0 ? 'No readiness gate data observed.' : 'No blocked readiness gates in the current report.'}
+            {gates.length === 0 ? 'No readiness gate data observed.' : 'No live readiness blockers in the current report.'}
           </div>
         ) : (
           blocked.map((gate) => (
@@ -360,7 +363,6 @@ export function RunnerPanel() {
               <h1 className="text-lg font-semibold text-foreground">Active work</h1>
               <StatusChip icon={<Activity size={12} aria-hidden="true" />} label={currentMode} tone={currentMode === 'disabled' || currentMode === 'report_only' ? 'safe' : 'warning'} />
               <StatusChip icon={<ListChecks size={12} aria-hidden="true" />} label={readiness.label} tone={readiness.tone} />
-              <StatusChip icon={<GitBranch size={12} aria-hidden="true" />} label={headLabel(data?.head)} tone="muted" />
             </div>
           </div>
 
@@ -371,6 +373,7 @@ export function RunnerPanel() {
             onClick={() => void refresh()}
             disabled={loading}
             className="text-[0.733rem] uppercase"
+            title="Refresh runner state now. Background refresh uses cached deterministic HTTP probes and no model tokens."
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
             <span>{loading ? 'Refreshing' : 'Refresh'}</span>
@@ -403,9 +406,9 @@ export function RunnerPanel() {
             />
             <MetricTile
               icon={<CheckCircle2 size={14} aria-hidden="true" />}
-              label="Runs in review"
+              label="Awaiting decision"
               value={reviewRuns}
-              caption="completed worker output awaiting decision"
+              caption="worker output not closed in Linear"
               tone={reviewRuns > 0 ? 'warning' : 'muted'}
             />
             <MetricTile
@@ -449,24 +452,6 @@ export function RunnerPanel() {
                   )}
                 </div>
               </section>
-
-              <section className="shell-panel overflow-hidden rounded-[24px]">
-                <SectionHeader
-                  icon={<Route size={12} className="text-primary" aria-hidden="true" />}
-                  kicker="Delegation lane"
-                  title="Codex handoff visibility"
-                />
-                <div className="space-y-2 p-3 text-sm text-muted-foreground">
-                  <div className="rounded-2xl border border-border/60 bg-background/48 px-3 py-2">
-                    <div className="font-medium text-foreground">Runner worker</div>
-                    <div className="mt-1">`codex_exec` can run tasks through the runner execution path.</div>
-                  </div>
-                  <div className="rounded-2xl border border-orange/25 bg-orange/10 px-3 py-2 text-orange">
-                    <div className="font-medium">Desktop `/goal` bridge not established</div>
-                    <div className="mt-1 text-orange/90">Linear tagging to this Codex context still needs an explicit protocol before it can be automated.</div>
-                  </div>
-                </div>
-              </section>
             </aside>
           </div>
 
@@ -474,17 +459,17 @@ export function RunnerPanel() {
             <section className="shell-panel min-w-0 overflow-hidden rounded-[24px]">
               <SectionHeader
                 icon={<BarChart3 size={12} className="text-primary" aria-hidden="true" />}
-                kicker="Execution flow"
-                title="Claims, launches, and review transitions"
+                kicker="Execution history"
+                title="Runner events by day"
               />
-              <FlowChart flow={work?.flow || []} />
+              <FlowSummary flow={work?.flow || []} />
             </section>
 
             <section className="shell-panel min-w-0 overflow-hidden rounded-[24px]">
               <SectionHeader
                 icon={<Clock3 size={12} className="text-primary" aria-hidden="true" />}
-                kicker="Recent runs"
-                title="Worker activity from Runner SQLite"
+                kicker="Recent outcomes"
+                title="Completed worker activity"
               />
               <div className="divide-y divide-border/50">
                 {(work?.recentRuns || []).length === 0 ? (

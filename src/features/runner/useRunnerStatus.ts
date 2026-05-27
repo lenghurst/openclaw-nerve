@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface RunnerProbeCommand {
   ok: boolean;
@@ -12,6 +12,7 @@ export interface RunnerProbeCommand {
 export interface RunnerWorkItem {
   id: string;
   title: string;
+  descriptionPreview?: string;
   url?: string;
   project?: {
     id?: string;
@@ -58,6 +59,8 @@ export interface RunnerWorkItem {
 export interface RunnerRunSummary {
   runId: string;
   taskId: string;
+  title?: string;
+  url?: string;
   status: string;
   claimStatus?: string;
   workerRoute?: string;
@@ -215,31 +218,46 @@ export function useRunnerStatus(): RunnerStatusState {
   const [data, setData] = useState<RunnerStatusReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef<Promise<void> | null>(null);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    try {
-      const response = await fetch('/api/runner/status', { signal });
-      const payload = await response.json() as RunnerStatusReport;
-      if (signal?.aborted) return;
-      setData(payload);
-      setError(response.ok ? null : payload.error || 'Runner status unavailable');
-    } catch (err) {
-      if (signal?.aborted) return;
-      setError(err instanceof Error ? err.message : 'Runner status unavailable');
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
+  const refresh = useCallback(async (signal?: AbortSignal, options: { force?: boolean; background?: boolean } = {}) => {
+    if (inFlight.current && !options.force) return inFlight.current;
+    if (!options.background) setLoading(true);
+
+    let request: Promise<void>;
+    request = (async () => {
+      try {
+        const response = await fetch(`/api/runner/status${options.force ? '?refresh=1' : ''}`, { signal });
+        const payload = await response.json() as RunnerStatusReport;
+        if (signal?.aborted) return;
+        setData(payload);
+        setError(response.ok ? null : payload.error || 'Runner status unavailable');
+      } catch (err) {
+        if (signal?.aborted) return;
+        setError(err instanceof Error ? err.message : 'Runner status unavailable');
+      } finally {
+        if (!signal?.aborted && !options.background) {
+          setLoading(false);
+        }
       }
-    }
+    })().finally(() => {
+      if (inFlight.current === request) {
+        inFlight.current = null;
+      }
+    });
+
+    inFlight.current = request;
+    return request;
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
     const interval = window.setInterval(() => {
-      void refresh();
-    }, 60000);
+      if (document.visibilityState !== 'hidden') {
+        void refresh(undefined, { background: true });
+      }
+    }, 15000);
     return () => {
       controller.abort();
       window.clearInterval(interval);
@@ -250,6 +268,6 @@ export function useRunnerStatus(): RunnerStatusState {
     data,
     loading,
     error,
-    refresh: () => refresh(),
+    refresh: () => refresh(undefined, { force: true }),
   };
 }
