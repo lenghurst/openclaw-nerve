@@ -818,6 +818,10 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
   const repo = await findRunnerRepo();
   const observedAt = new Date().toISOString();
   const liveDbPath = process.env.RUNNERD_DB_PATH?.trim() || DEFAULT_LIVE_DB_PATH;
+  const liveEvidencePath = process.env.RUNNERD_LIVE_EVIDENCE_PATH?.trim();
+  const liveReadinessArgs = liveEvidencePath
+    ? ['-m', 'runnerd.cli', 'live-readiness', '--live-evidence', liveEvidencePath, '--json']
+    : ['-m', 'runnerd.cli', 'live-readiness', '--json'];
 
   if (!repo.repoPath) {
     return {
@@ -850,7 +854,7 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
     execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json', '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'doctor', '--strict', '--json', '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'scan', '--dry-run', '--json', '--db', liveDbPath], repo.repoPath),
-    execFileJson('python3', ['-m', 'runnerd.cli', 'live-readiness', '--json'], repo.repoPath),
+    execFileJson('python3', liveReadinessArgs, repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'live', 'authority', 'snapshot', '--json'], repo.repoPath),
     collectRunnerWorkDigest(repo.repoPath, liveDbPath).catch((err: unknown): RunnerWorkDigest => ({
       ok: false,
@@ -909,7 +913,9 @@ export async function collectRunnerStatus(): Promise<RunnerStatusReport> {
         `python3 -m runnerd.cli status --json --db ${liveDbPath}`,
         `python3 -m runnerd.cli doctor --strict --json --db ${liveDbPath}`,
         `python3 -m runnerd.cli scan --dry-run --json --db ${liveDbPath}`,
-        'python3 -m runnerd.cli live-readiness --json',
+        liveEvidencePath
+          ? `python3 -m runnerd.cli live-readiness --live-evidence ${liveEvidencePath} --json`
+          : 'python3 -m runnerd.cli live-readiness --json',
         'python3 -m runnerd.cli live authority snapshot --json',
       ],
     },
