@@ -691,13 +691,13 @@ export default function App({ onLogout }: AppProps) {
     });
   }, [currentSession, getWorkspaceSwitchLabel, requestWorkspaceTransition, sessions, spawnSession]);
 
-  // Boot sequence: fade in panels when connected
+  // Boot sequence: Runner is a backend read-only view and remains usable while the gateway is offline.
   useEffect(() => {
-    if (connectionState === 'connected' && !booted) {
+    if ((connectionState === 'connected' || viewMode === 'runner') && !booted) {
       const timer = setTimeout(() => setBooted(true), 50);
       return () => clearTimeout(timer);
     }
-  }, [connectionState, booted]);
+  }, [connectionState, booted, viewMode]);
 
   // Log header glow when new entries arrive
   // This effect legitimately needs to set state in response to prop changes
@@ -920,7 +920,7 @@ export default function App({ onLogout }: AppProps) {
         Skip to chat
       </a>
       <ConnectDialog
-        open={dialogOpen && connectionState !== 'connected' && connectionState !== 'reconnecting'}
+        open={dialogOpen && viewMode !== 'runner' && connectionState !== 'connected' && connectionState !== 'reconnecting'}
         onConnect={handleConnect}
         error={connectError}
         defaultUrl={editableUrl}

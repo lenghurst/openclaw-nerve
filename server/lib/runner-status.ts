@@ -32,6 +32,11 @@ interface RunnerWorkDigest {
     reviewRuns: number;
     observedTasks: number;
     activeLinearIssues: number;
+    openLinearIssues: number;
+    readyLinearIssues: number;
+    dorBlockedLinearIssues: number;
+    backlogLinearIssues: number;
+    todoLinearIssues: number;
     projects: number;
     lastEventAt: string | null;
   };
@@ -46,7 +51,9 @@ interface RunnerWorkDigest {
     completed: number;
   }>;
   items: RunnerWorkItem[];
+  queueItems: RunnerWorkItem[];
   recentRuns: RunnerRunSummary[];
+  cycles: RunnerCycleSummary[];
   flow: Array<{
     date: string;
     claimed: number;
@@ -56,6 +63,75 @@ interface RunnerWorkDigest {
     blocked: number;
     total: number;
   }>;
+}
+
+interface RunnerCycleSummary {
+  id: string;
+  name: string;
+  position: 'current' | 'upcoming' | 'past' | 'uncycled';
+  startsAt?: string;
+  endsAt?: string;
+  completedAt?: string | null;
+  active: number;
+  review: number;
+  backlog: number;
+  todo: number;
+  completed: number;
+  total: number;
+  items: Array<{
+    id: string;
+    title: string;
+    url?: string;
+    state: string;
+    stateType?: string;
+    runnerStatus: string;
+  }>;
+}
+
+interface RunnerEvidenceFile {
+  path: string;
+  sha256?: string;
+}
+
+interface RunnerWorkerCommand {
+  cwd?: string;
+  exitCode?: number | null;
+  stdoutRef?: string;
+  stderrRef?: string;
+  argvRedacted?: string[];
+}
+
+interface RunnerWorkerArtifact {
+  route?: string;
+  packetId?: string;
+  autonomy?: boolean;
+  evidenceDir?: string;
+  worktreePath?: string;
+  workspaceId?: string;
+  finalHead?: string;
+  manifestPresent: boolean;
+  files: RunnerEvidenceFile[];
+  command?: RunnerWorkerCommand;
+  transcriptRef?: string;
+  stderrRef?: string;
+  diffRef?: string;
+  hasDiff: boolean;
+  noDiff: boolean;
+  operatorSummary?: RunnerOperatorSummaryDigest;
+}
+
+interface RunnerOperatorSummaryDigest {
+  outcome?: string;
+  nextAction?: string;
+  diffState?: string;
+  changedFiles: string[];
+  validation?: string;
+  refusalCodes: string[];
+  workerDirectWriteback?: string;
+  evidenceRefs: string[];
+  threadId?: string;
+  commandEventCount?: number;
+  workerFinalMessage?: string;
 }
 
 interface RunnerWorkItem {
@@ -98,11 +174,22 @@ interface RunnerWorkItem {
     lastRunAt?: string;
     lastEventAt?: string;
     lastEventType?: string;
+    artifact?: RunnerWorkerArtifact;
     source: 'runner_db' | 'linear';
   };
+  readiness?: RunnerIssueReadiness;
   updatedAt?: string;
   startedAt?: string | null;
   completedAt?: string | null;
+}
+
+interface RunnerIssueReadiness {
+  verdict: 'ready' | 'missing' | 'non_executable';
+  executable: boolean;
+  hitlClass?: string;
+  missing: string[];
+  refusalCodes: string[];
+  plannedRunDir?: string;
 }
 
 interface RunnerRunSummary {
@@ -116,6 +203,7 @@ interface RunnerRunSummary {
   workerStatus?: string;
   validation?: string;
   refusalCode?: string | null;
+  artifact?: RunnerWorkerArtifact;
   createdAt: string;
   updatedAt: string;
   durationMs: number;
@@ -134,6 +222,23 @@ export interface RunnerStatusReport {
   liveReadiness: JsonRecord | null;
   authoritySnapshot: JsonRecord | null;
   work: RunnerWorkDigest | null;
+  webhookQueue: RunnerWebhookQueueHealth;
+  autonomyView: RunnerAutonomyView;
+  autonomy: {
+    state: 'autonomous' | 'idle' | 'report_only' | 'blocked' | 'offline';
+    label: string;
+    tone: 'safe' | 'warning' | 'danger' | 'muted' | 'primary';
+    reasons: string[];
+    mode?: string;
+    liveReady: boolean;
+    dispatchEnabled: boolean;
+    activeExecutions: number;
+    openLinearIssues: number;
+    readyLinearIssues: number;
+    dorBlockedLinearIssues: number;
+    backlogLinearIssues: number;
+    todoLinearIssues: number;
+  };
   liveDbPath: string;
   safety: {
     dashboardMutations: 0;
@@ -153,9 +258,108 @@ export interface RunnerStatusReport {
   error?: string;
 }
 
+interface RunnerAutonomyView {
+  mode?: string;
+  activationMode: 'full_autonomy_live' | 'full_autonomy_candidate' | 'class_scoped_autonomy' | 'report_only' | 'disabled' | 'unknown';
+  approval: {
+    state: 'valid' | 'missing' | 'blocked' | 'unknown';
+    approvalId?: string;
+    path?: string;
+  };
+  dispositions: {
+    summary: Record<string, number>;
+    lanes: {
+      running: number;
+      ready: number;
+      needsInfo: number;
+      approvalGated: number;
+      reviewOnly: number;
+      blocked: number;
+      completed: number;
+    };
+  };
+  operatorActions: Array<{
+    id: string;
+    label: string;
+    state: 'clear' | 'attention' | 'blocked';
+    reason: string;
+  }>;
+  workerRoutes: Array<{
+    route: string;
+    state: 'active' | 'idle' | 'attention';
+    active: number;
+    recent: number;
+    health: string;
+  }>;
+  routeHealth: Record<string, {
+    state: 'active' | 'idle' | 'attention';
+    active: number;
+    recent: number;
+    health: string;
+  }>;
+  approvalQueue: {
+    count: number;
+    items: Array<{ id: string; title: string; reason: string }>;
+  };
+  rollbackReadiness: {
+    state: 'ready' | 'attention' | 'unknown';
+    reasons: string[];
+  };
+  writebackHealth: {
+    state: 'converged' | 'attention' | 'unknown';
+    held: number;
+    reasons: string[];
+  };
+  budget: {
+    timeBudgetSeconds?: number;
+    tokenBudget?: number;
+    costBudgetUsd?: number;
+  };
+  killSwitch: {
+    active?: boolean;
+    valid?: boolean;
+    source?: string;
+    reason?: string;
+  };
+  dashboardMutations: 0;
+}
+
+interface RunnerWebhookQueueHealth {
+  ok: boolean;
+  state: 'not_configured' | 'unknown' | 'observed';
+  lastValidDelivery: string | null;
+  lastInvalidSignature: string | null;
+  counts: {
+    valid: number;
+    invalidSignature: number;
+    queued: number;
+    handled: number;
+    ignored: number;
+  };
+  queue: {
+    depth: number;
+    lagSeconds: number | null;
+  };
+  consumer: {
+    state: 'not_configured' | 'unknown' | 'healthy' | 'blocked';
+    detail: string;
+  };
+  recent: Array<{
+    observedAt: string;
+    issueKey?: string;
+    eventClass: string;
+    state: string;
+    reason?: string;
+  }>;
+  notes: string[];
+}
+
 const DEFAULT_TIMEOUT_MS = 2500;
 const DEFAULT_MAX_BUFFER = 96 * 1024;
 const DEFAULT_LIVE_DB_PATH = '/home/ubuntu/.local/state/openclaw-runner/runnerd.sqlite';
+const DEFAULT_RUNNERD_CONFIG_PATH = '/home/ubuntu/.config/runnerd/config.toml';
+const DEFAULT_RUNNERD_EVIDENCE_ROOT = '/home/ubuntu/.local/state/openclaw-runner/evidence';
+const DEFAULT_RUNNERD_WORKTREE_ROOT = '/home/ubuntu/.local/state/openclaw-runner/worktrees';
 const DEFAULT_LINEAR_SECRETS_PATH = '/home/ubuntu/.config/runnerd/secrets.env';
 const DEFAULT_LINEAR_PROJECT = 'runner';
 const LINEAR_TIMEOUT_MS = 2500;
@@ -169,8 +373,10 @@ import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 db_path = sys.argv[1]
+evidence_root = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
 
 def iso(ms):
     if ms is None:
@@ -188,6 +394,30 @@ def parse_json(value):
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+def read_json_file(path):
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+def run_evidence(run_id):
+    if not evidence_root or not run_id:
+        return {}
+    evidence_dir = evidence_root / run_id
+    manifest = read_json_file(evidence_dir / "manifest.json")
+    commands = read_json_file(evidence_dir / "commands.json")
+    operator_summary = read_json_file(evidence_dir / "operator-summary.json")
+    return {
+        "evidence_dir": str(evidence_dir),
+        "manifest_present": bool(manifest),
+        "commands_present": bool(commands),
+        "operator_summary_present": bool(operator_summary),
+        "manifest": manifest,
+        "commands": commands,
+        "operator_summary": operator_summary,
+    }
 
 conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
 conn.row_factory = sqlite3.Row
@@ -224,6 +454,7 @@ for row in conn.execute("""
     item["snapshot_observed_at_iso"] = iso(item.get("snapshot_observed_at"))
     item["snapshot"] = parse_json(item.pop("snapshot_json", None))
     item["worker_details"] = parse_json(item.pop("worker_details_json", None))
+    item["evidence_info"] = run_evidence(item.get("run_id"))
     runs.append(item)
 
 snapshots = []
@@ -311,6 +542,8 @@ async function hasRunnerSurface(repoPath: string): Promise<boolean> {
   try {
     await access(resolve(repoPath, 'docs/runnerd/PRD.md'));
     await access(resolve(repoPath, 'runnerd/cli/main.py'));
+    await access(resolve(repoPath, 'runnerd/live_readiness.py'));
+    await access(resolve(repoPath, 'runnerd/authority_verifier.py'));
     return true;
   } catch {
     return false;
@@ -401,6 +634,22 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
+function asNestedRecord(value: unknown, key: string): JsonRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const nested = (value as JsonRecord)[key];
+  return nested && typeof nested === 'object' && !Array.isArray(nested) ? nested as JsonRecord : {};
+}
+
 function descriptionPreview(value: unknown): string | undefined {
   const text = asString(value);
   if (!text) return undefined;
@@ -414,6 +663,102 @@ function descriptionPreview(value: unknown): string | undefined {
     .trim();
   if (!cleaned) return undefined;
   return cleaned.length > 280 ? `${cleaned.slice(0, 277)}...` : cleaned;
+}
+
+const REQUIRED_DOR_MARKERS: Array<[string, string[]]> = [
+  ['objective_hypothesis', ['objective / hypothesis', 'objective', 'hypothesis']],
+  ['target_coordinates', ['target coordinates']],
+  ['execution_constraints', ['execution constraints', 'non-scope']],
+  ['deterministic_success_criteria', ['deterministic success criteria']],
+  ['evidence_plan', ['evidence plan', 'planned run directory']],
+];
+const VALID_HITL_CLASSES = ['No-HITL', 'HITL-input', 'HITL-approval'];
+const PLANNED_RUN_ROOT = '/home/ubuntu/ai-vault/runs/';
+
+function issueReadiness(issue: JsonRecord, stateName?: string): RunnerIssueReadiness {
+  const state = (stateName || '').trim().toLowerCase();
+  if (['done', 'completed', 'canceled', 'cancelled'].includes(state)) {
+    return { verdict: 'non_executable', executable: false, missing: [], refusalCodes: [] };
+  }
+
+  const text = asString(issue.description) || '';
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ');
+  const missing = REQUIRED_DOR_MARKERS
+    .filter(([, markers]) => !markers.some((marker) => normalized.includes(marker)))
+    .map(([key]) => key);
+  const hitlMatch = text.match(/hitl class:\s*(No-HITL|HITL-input|HITL-approval)\b/i);
+  const hitlClass = hitlMatch
+    ? VALID_HITL_CLASSES.find((item) => item.toLowerCase() === hitlMatch[1].toLowerCase())
+    : undefined;
+  const refusalCodes: string[] = [];
+  if (!hitlClass) refusalCodes.push('invalid_hitl_class');
+  const duplicateHitl = text.match(/hitl class:/gi);
+  if (duplicateHitl && duplicateHitl.length > 1) refusalCodes.push('duplicate_hitl_class');
+
+  const plannedRunDir = plannedRunDirectory(text);
+  if (!plannedRunDir && !missing.includes('evidence_plan')) missing.push('evidence_plan');
+
+  return {
+    verdict: missing.length > 0 || refusalCodes.length > 0 ? 'missing' : 'ready',
+    executable: true,
+    hitlClass,
+    missing: [...new Set(missing)],
+    refusalCodes,
+    plannedRunDir,
+  };
+}
+
+function plannedRunDirectory(text: string): string | undefined {
+  const match = text.match(/planned run directory:\s*([^\s]+)/i);
+  if (!match) return undefined;
+  const value = match[1].trim().replace(/^[`'"]|[`'",.;)]$/g, '');
+  if (!value.startsWith(PLANNED_RUN_ROOT) || value.includes('/../')) return undefined;
+  return value;
+}
+
+function isReadyForRunner(item: RunnerWorkItem): boolean {
+  return (
+    item.readiness?.verdict === 'ready'
+    && item.readiness.hitlClass === 'No-HITL'
+    && !isCompletedItem(item)
+  );
+}
+
+function isRunnerSourceQueueItem(item: RunnerWorkItem): boolean {
+  return !isCompletedItem(item) && (isBacklogItem(item) || isTodoItem(item));
+}
+
+function isReadyForRunnerClaim(item: RunnerWorkItem): boolean {
+  return isReadyForRunner(item) && isRunnerSourceQueueItem(item);
+}
+
+function defaultWebhookQueueHealth(): RunnerWebhookQueueHealth {
+  return {
+    ok: true,
+    state: 'not_configured',
+    lastValidDelivery: null,
+    lastInvalidSignature: null,
+    counts: {
+      valid: 0,
+      invalidSignature: 0,
+      queued: 0,
+      handled: 0,
+      ignored: 0,
+    },
+    queue: {
+      depth: 0,
+      lagSeconds: null,
+    },
+    consumer: {
+      state: 'not_configured',
+      detail: 'Linear webhook events are not configured as Runner authority in this deployment.',
+    },
+    recent: [],
+    notes: [
+      'Webhook events are request signals only.',
+      'Dashboard status is read-only and cannot replay, forge, or dispatch events.',
+    ],
+  };
 }
 
 function runPythonJson(args: string[], cwd: string, timeout = DEFAULT_TIMEOUT_MS): Promise<CommandResult> {
@@ -573,6 +918,7 @@ function normalizeLinearIssue(issue: JsonRecord): Partial<RunnerWorkItem> & { id
     updatedAt: asString(issue.updatedAt),
     startedAt: asString(issue.startedAt) || null,
     completedAt: asString(issue.completedAt) || null,
+    readiness: issueReadiness(issue, asString(state.name)),
   };
 }
 
@@ -608,6 +954,105 @@ function latestEventByRun(events: JsonRecord[]): Map<string, JsonRecord> {
   return map;
 }
 
+function buildOperatorSummaryDigest(summary: JsonRecord): RunnerOperatorSummaryDigest | undefined {
+  if (!Object.keys(summary).length) return undefined;
+  const changes = asNestedRecord(summary, 'changes');
+  const validation = asNestedRecord(summary, 'validation');
+  const authority = asNestedRecord(summary, 'writeback_authority');
+  const model = asNestedRecord(summary, 'model_session');
+  const commands = asNestedRecord(summary, 'commands');
+  const codexEvents = asNestedRecord(commands, 'codex_event_summary');
+  const changedFiles = Array.isArray(changes.changed_files)
+    ? changes.changed_files.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const refusalCodes = Array.isArray(validation.refusal_codes)
+    ? validation.refusal_codes.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const evidenceRefs = Array.isArray(summary.evidence_refs)
+    ? summary.evidence_refs.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const workerFinalMessage = asString(summary.worker_final_message);
+  return {
+    outcome: asString(summary.outcome),
+    nextAction: asString(summary.next_action),
+    diffState: asString(changes.state),
+    changedFiles,
+    validation: asString(validation.outcome),
+    refusalCodes,
+    workerDirectWriteback: asString(authority.worker_direct_writeback),
+    evidenceRefs,
+    threadId: asString(model.thread_id),
+    commandEventCount: asNumber(codexEvents.command_event_count),
+    workerFinalMessage: workerFinalMessage ? workerFinalMessage.slice(0, 700) : undefined,
+  };
+}
+
+function buildWorkerArtifact(run: JsonRecord, evidenceRoot: string, worktreeRoot: string): RunnerWorkerArtifact | undefined {
+  const runId = asString(run.run_id);
+  if (!runId) return undefined;
+
+  const workerDetails = run.worker_details && typeof run.worker_details === 'object' && !Array.isArray(run.worker_details)
+    ? run.worker_details as JsonRecord
+    : {};
+  const evidenceInfo = run.evidence_info && typeof run.evidence_info === 'object' && !Array.isArray(run.evidence_info)
+    ? run.evidence_info as JsonRecord
+    : {};
+  const manifest = asNestedRecord(evidenceInfo, 'manifest');
+  const commands = asNestedRecord(evidenceInfo, 'commands');
+  const operatorSummary = asNestedRecord(evidenceInfo, 'operator_summary');
+  const commandRecord = asArray(commands.commands)[0];
+  const files = asArray(manifest.files)
+    .map((file): RunnerEvidenceFile | null => {
+      const path = asString(file.path);
+      if (!path) return null;
+      return { path, sha256: asString(file.sha256) };
+    })
+    .filter((file): file is RunnerEvidenceFile => Boolean(file));
+  const filePaths = new Set(files.map((file) => file.path));
+  const diffRef = filePaths.has('diff.patch')
+    ? 'diff.patch'
+    : [...filePaths].find((path) => path.endsWith('.patch') || path.includes('diff'));
+  const noDiff = filePaths.has('no-diff.json');
+  const stdoutRef = asString(commandRecord?.stdout_ref);
+  const stderrRef = asString(commandRecord?.stderr_ref);
+  const evidenceDir = asString(manifest.evidence_dir)
+    || asString(evidenceInfo.evidence_dir)
+    || `${evidenceRoot}/${runId}`;
+  const worktreePath = asString(manifest.workspace_path)
+    || asString(commandRecord?.cwd)
+    || `${worktreeRoot}/${runId}`;
+  const route = asString(run.worker_route);
+  const manifestPresent = evidenceInfo.manifest_present === true || Object.keys(manifest).length > 0;
+  const commandsPresent = evidenceInfo.commands_present === true || Object.keys(commands).length > 0;
+
+  if (!route && !manifestPresent && !commandsPresent) return undefined;
+
+  return {
+    route,
+    packetId: asString(workerDetails.packet_id),
+    autonomy: asBoolean(workerDetails.autonomy),
+    evidenceDir,
+    worktreePath,
+    workspaceId: asString(manifest.workspace_id),
+    finalHead: asString(manifest.final_head),
+    manifestPresent,
+    files,
+    command: commandRecord ? {
+      cwd: asString(commandRecord.cwd),
+      exitCode: typeof commandRecord.exit_code === 'number' ? commandRecord.exit_code : commandRecord.exit_code === null ? null : undefined,
+      stdoutRef,
+      stderrRef,
+      argvRedacted: asStringList(commandRecord.argv_redacted),
+    } : undefined,
+    transcriptRef: stdoutRef || (filePaths.has('codex-events.jsonl') ? 'codex-events.jsonl' : undefined),
+    stderrRef: stderrRef || (filePaths.has('codex-stderr.txt') ? 'codex-stderr.txt' : undefined),
+    diffRef,
+    hasDiff: Boolean(diffRef && diffRef !== 'no-diff.json'),
+    noDiff,
+    operatorSummary: buildOperatorSummaryDigest(operatorSummary),
+  };
+}
+
 function statusRank(item: RunnerWorkItem): number {
   const runnerStatus = item.runner.status;
   const stateType = item.state.type;
@@ -638,6 +1083,15 @@ function isRunnerExecuting(status?: string): boolean {
 function isPresentWorkItem(item: RunnerWorkItem): boolean {
   if (isCompletedItem(item)) return false;
   return isRunnerExecuting(item.runner.status) || item.state.type === 'started';
+}
+
+function isBacklogItem(item: RunnerWorkItem): boolean {
+  return item.state.type === 'backlog' || item.state.name.toLowerCase() === 'backlog';
+}
+
+function isTodoItem(item: RunnerWorkItem): boolean {
+  const stateName = item.state.name.toLowerCase();
+  return item.state.type === 'unstarted' || stateName === 'todo' || stateName === 'to do';
 }
 
 function buildFlow(events: JsonRecord[]): RunnerWorkDigest['flow'] {
@@ -704,7 +1158,81 @@ function buildProjectSummary(items: RunnerWorkItem[]): RunnerWorkDigest['project
   return [...projects.values()].sort((a, b) => b.active - a.active || b.total - a.total || a.name.localeCompare(b.name));
 }
 
-function buildRecentRunSummaries(runs: JsonRecord[], events: JsonRecord[], issuesById: Map<string, RunnerWorkItem>): RunnerRunSummary[] {
+function cyclePosition(item: RunnerWorkItem, observedAt: string): RunnerCycleSummary['position'] {
+  if (!item.cycle?.id && !item.cycle?.name) return 'uncycled';
+  if (item.cycle.completedAt) return 'past';
+
+  const observedMs = Date.parse(observedAt);
+  const startsMs = item.cycle.startsAt ? Date.parse(item.cycle.startsAt) : Number.NaN;
+  const endsMs = item.cycle.endsAt ? Date.parse(item.cycle.endsAt) : Number.NaN;
+  if (Number.isFinite(startsMs) && startsMs > observedMs) return 'upcoming';
+  if (Number.isFinite(endsMs) && endsMs < observedMs) return 'past';
+  return 'current';
+}
+
+function cycleRank(position: RunnerCycleSummary['position']): number {
+  if (position === 'current') return 0;
+  if (position === 'upcoming') return 1;
+  if (position === 'uncycled') return 2;
+  return 3;
+}
+
+function buildCycleSummary(items: RunnerWorkItem[], observedAt: string): RunnerCycleSummary[] {
+  const cycles = new Map<string, RunnerCycleSummary>();
+  for (const item of items) {
+    const key = item.cycle?.id || item.cycle?.name || 'uncycled';
+    const current = cycles.get(key) || {
+      id: item.cycle?.id || key,
+      name: item.cycle?.name || 'No cycle',
+      position: cyclePosition(item, observedAt),
+      startsAt: item.cycle?.startsAt,
+      endsAt: item.cycle?.endsAt,
+      completedAt: item.cycle?.completedAt,
+      active: 0,
+      review: 0,
+      backlog: 0,
+      todo: 0,
+      completed: 0,
+      total: 0,
+      items: [],
+    };
+    current.total += 1;
+    if (isCompletedItem(item)) current.completed += 1;
+    else if (isPresentWorkItem(item)) current.active += 1;
+    else if (item.runner.status === 'review' || item.state.name.toLowerCase().includes('review')) current.review += 1;
+    else if (isBacklogItem(item)) current.backlog += 1;
+    else if (isTodoItem(item)) current.todo += 1;
+
+    if (current.items.length < 6 && !isCompletedItem(item)) {
+      current.items.push({
+        id: item.id,
+        title: item.title,
+        url: item.url,
+        state: item.state.name,
+        stateType: item.state.type,
+        runnerStatus: item.runner.status,
+      });
+    }
+    cycles.set(key, current);
+  }
+
+  return [...cycles.values()]
+    .sort((a, b) => (
+      cycleRank(a.position) - cycleRank(b.position)
+      || (a.startsAt || '').localeCompare(b.startsAt || '')
+      || b.total - a.total
+      || a.name.localeCompare(b.name)
+    ))
+    .slice(0, 12);
+}
+
+function buildRecentRunSummaries(
+  runs: JsonRecord[],
+  events: JsonRecord[],
+  issuesById: Map<string, RunnerWorkItem>,
+  evidenceRoot: string,
+  worktreeRoot: string,
+): RunnerRunSummary[] {
   const eventByRun = latestEventByRun(events);
   return runs.slice(0, 12).map((run) => {
     const createdMs = asNumber(run.created_at) || 0;
@@ -725,6 +1253,7 @@ function buildRecentRunSummaries(runs: JsonRecord[], events: JsonRecord[], issue
       workerStatus: asString(run.worker_status),
       validation: asString(run.validation_outcome),
       refusalCode: asString(run.validation_refusal_code) || null,
+      artifact: buildWorkerArtifact(run, evidenceRoot, worktreeRoot),
       createdAt: asString(run.created_at_iso) || '',
       updatedAt: asString(run.updated_at_iso) || '',
       durationMs: Math.max(0, updatedMs - createdMs),
@@ -733,9 +1262,14 @@ function buildRecentRunSummaries(runs: JsonRecord[], events: JsonRecord[], issue
   });
 }
 
-async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Promise<RunnerWorkDigest> {
+async function collectRunnerWorkDigest(
+  repoPath: string,
+  liveDbPath: string,
+  evidenceRoot: string,
+  worktreeRoot: string,
+): Promise<RunnerWorkDigest> {
   const observedAt = new Date().toISOString();
-  const dbResult = await runPythonJson(['-c', DASHBOARD_SQL_SCRIPT, liveDbPath], repoPath, DEFAULT_TIMEOUT_MS);
+  const dbResult = await runPythonJson(['-c', DASHBOARD_SQL_SCRIPT, liveDbPath, evidenceRoot], repoPath, DEFAULT_TIMEOUT_MS);
   const dbPayload = asRecord(dbResult.json);
   const runs = asArray(dbPayload?.runs);
   const snapshots = asArray(dbPayload?.snapshots);
@@ -765,6 +1299,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
         status: 'not claimed',
         source: 'linear',
       },
+      readiness: normalized.readiness,
     });
   }
 
@@ -778,6 +1313,7 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
     const existing = linearItems.get(taskId);
     if (existing?.runner.source === 'runner_db') continue;
     const event = eventByRun.get(asString(run.run_id) || '');
+    const artifact = buildWorkerArtifact(run, evidenceRoot, worktreeRoot);
     const fallbackTitle = existing?.title || asString(snapshot.title) || taskId;
     const fallbackProject = existing?.project || projectFromSnapshot(snapshot);
     linearItems.set(taskId, {
@@ -805,8 +1341,10 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
         lastRunAt: asString(run.updated_at_iso) || asString(run.created_at_iso),
         lastEventAt: asString(event?.created_at_iso),
         lastEventType: asString(event?.type),
+        artifact,
         source: 'runner_db',
       },
+      readiness: existing?.readiness || issueReadiness(snapshot, existing?.state.name || asString(snapshot.status)),
     });
   }
 
@@ -829,17 +1367,27 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
         status: 'observed',
         source: 'runner_db',
       },
+      readiness: issueReadiness(snapshot, asString(snapshotRow.status)),
     });
   }
 
   const allItems = [...linearItems.values()].sort((a, b) => statusRank(a) - statusRank(b) || (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const issuesById = new Map(allItems.map((item) => [item.id, item]));
   const items = allItems.filter(isPresentWorkItem);
+  const queueItems = allItems
+    .filter((item) => !isCompletedItem(item) && !isPresentWorkItem(item))
+    .slice(0, 16);
   const projects = buildProjectSummary(allItems);
-  const recentRuns = buildRecentRunSummaries(runs, events, issuesById);
+  const recentRuns = buildRecentRunSummaries(runs, events, issuesById, evidenceRoot, worktreeRoot);
+  const cycles = buildCycleSummary(allItems, observedAt);
   const activeExecutions = runs.filter((run) => ['claimed', 'launched', 'validating'].includes(asString(run.status) || '')).length;
   const reviewRuns = runs.filter((run) => asString(run.status) === 'review' && !isCompletedItem(issuesById.get(asString(run.task_id) || ''))).length;
   const activeLinearIssues = allItems.filter((item) => item.state.type === 'started' && !isCompletedItem(item)).length;
+  const openLinearIssues = allItems.filter((item) => !isCompletedItem(item)).length;
+  const readyLinearIssues = allItems.filter(isReadyForRunnerClaim).length;
+  const dorBlockedLinearIssues = allItems.filter((item) => !isCompletedItem(item) && item.readiness?.verdict !== 'ready').length;
+  const backlogLinearIssues = allItems.filter((item) => !isCompletedItem(item) && isBacklogItem(item)).length;
+  const todoLinearIssues = allItems.filter((item) => !isCompletedItem(item) && isTodoItem(item)).length;
   const lastEventAt = asString(events[0]?.created_at_iso) || null;
 
   return {
@@ -858,20 +1406,363 @@ async function collectRunnerWorkDigest(repoPath: string, liveDbPath: string): Pr
       reviewRuns,
       observedTasks: allItems.length,
       activeLinearIssues,
+      openLinearIssues,
+      readyLinearIssues,
+      dorBlockedLinearIssues,
+      backlogLinearIssues,
+      todoLinearIssues,
       projects: projects.length,
       lastEventAt,
     },
     projects,
     items,
+    queueItems,
     recentRuns,
+    cycles,
     flow: buildFlow(events),
   };
+}
+
+function deriveAutonomy(
+  status: JsonRecord | null,
+  scan: JsonRecord | null,
+  liveReadiness: JsonRecord | null,
+  work: RunnerWorkDigest | null,
+  dispatchEnabled: boolean,
+): RunnerStatusReport['autonomy'] {
+  const mode = asString(status?.mode);
+  const readiness = liveReadiness?.live_readiness && typeof liveReadiness.live_readiness === 'object' && !Array.isArray(liveReadiness.live_readiness)
+    ? liveReadiness.live_readiness as JsonRecord
+    : {};
+  const liveReady = readiness.live_ready === true;
+  const activeExecutions = work?.summary.activeExecutions ?? 0;
+  const openLinearIssues = work?.summary.openLinearIssues ?? 0;
+  const readyLinearIssues = work?.summary.readyLinearIssues ?? 0;
+  const dorBlockedLinearIssues = work?.summary.dorBlockedLinearIssues ?? 0;
+  const backlogLinearIssues = work?.summary.backlogLinearIssues ?? 0;
+  const todoLinearIssues = work?.summary.todoLinearIssues ?? 0;
+  const reasons: string[] = [];
+
+  if (!status) {
+    return {
+      state: 'offline',
+      label: 'Runner offline',
+      tone: 'danger',
+      reasons: ['runner_status_unavailable'],
+      liveReady: false,
+      dispatchEnabled,
+      activeExecutions,
+      openLinearIssues,
+      readyLinearIssues,
+      dorBlockedLinearIssues,
+      backlogLinearIssues,
+      todoLinearIssues,
+    };
+  }
+
+  const scanDecision = asString(scan?.decision);
+  const blockerCount = asNumber(readiness.blocker_count);
+  if (mode) reasons.push(`mode:${mode}`);
+  if (scanDecision) reasons.push(`scan:${scanDecision}`);
+  if (typeof blockerCount === 'number' && blockerCount > 0) reasons.push(`live_blockers:${blockerCount}`);
+  if (!dispatchEnabled) reasons.push('dashboard_dispatch_disabled');
+  if (openLinearIssues > 0) reasons.push(`open_linear:${openLinearIssues}`);
+  if (readyLinearIssues > 0) reasons.push(`ready:${readyLinearIssues}`);
+  if (dorBlockedLinearIssues > 0) reasons.push(`not_ready:${dorBlockedLinearIssues}`);
+  if (backlogLinearIssues > 0) reasons.push(`backlog:${backlogLinearIssues}`);
+  if (todoLinearIssues > 0) reasons.push(`todo:${todoLinearIssues}`);
+
+  if (mode === 'disabled' || mode === 'report_only') {
+    return {
+      state: 'report_only',
+      label: mode === 'report_only' ? 'Report-only, not autonomous' : 'Disabled, not autonomous',
+      tone: openLinearIssues > 0 ? 'warning' : 'muted',
+      reasons,
+      mode,
+      liveReady,
+      dispatchEnabled,
+      activeExecutions,
+      openLinearIssues,
+      readyLinearIssues,
+      dorBlockedLinearIssues,
+      backlogLinearIssues,
+      todoLinearIssues,
+    };
+  }
+
+  if (!liveReady || !dispatchEnabled) {
+    return {
+      state: 'blocked',
+      label: 'Autonomy blocked',
+      tone: 'danger',
+      reasons,
+      mode,
+      liveReady,
+      dispatchEnabled,
+      activeExecutions,
+      openLinearIssues,
+      readyLinearIssues,
+      dorBlockedLinearIssues,
+      backlogLinearIssues,
+      todoLinearIssues,
+    };
+  }
+
+  if (activeExecutions > 0) {
+    return {
+      state: 'autonomous',
+      label: 'Autonomous work active',
+      tone: 'safe',
+      reasons,
+      mode,
+      liveReady,
+      dispatchEnabled,
+      activeExecutions,
+      openLinearIssues,
+      readyLinearIssues,
+      dorBlockedLinearIssues,
+      backlogLinearIssues,
+      todoLinearIssues,
+    };
+  }
+
+  return {
+    state: 'idle',
+    label: readyLinearIssues > 0
+      ? 'Autonomy idle with ready queue'
+      : openLinearIssues > 0
+        ? 'Autonomy idle; no ready issues'
+        : 'Autonomy idle',
+    tone: readyLinearIssues > 0 ? 'warning' : 'safe',
+    reasons,
+    mode,
+    liveReady,
+    dispatchEnabled,
+    activeExecutions,
+    openLinearIssues,
+    readyLinearIssues,
+    dorBlockedLinearIssues,
+    backlogLinearIssues,
+    todoLinearIssues,
+  };
+}
+
+function deriveAutonomyView(
+  status: JsonRecord | null,
+  liveReadiness: JsonRecord | null,
+  authoritySnapshot: JsonRecord | null,
+  work: RunnerWorkDigest | null,
+): RunnerAutonomyView {
+  const mode = asString(status?.mode);
+  const config = asRecord(status?.config as JsonValue | undefined);
+  const readiness = liveReadiness?.live_readiness && typeof liveReadiness.live_readiness === 'object' && !Array.isArray(liveReadiness.live_readiness)
+    ? liveReadiness.live_readiness as JsonRecord
+    : {};
+  const readinessEvidence = asRecord(readiness.evidence as JsonValue | undefined) || {};
+  const fullAutonomyApproval = asRecord(readinessEvidence.full_autonomy_approval as JsonValue | undefined);
+  const fullAutonomyEnvelope = asRecord(fullAutonomyApproval?.envelope as JsonValue | undefined) || {};
+  const fullAutonomyBudgets = asRecord(fullAutonomyEnvelope.budgets as JsonValue | undefined) || {};
+  const fullAutonomyApprovalOk = fullAutonomyApproval?.ok === true
+    && ['valid_live', 'valid_report_only'].includes(String(fullAutonomyApproval.status || ''));
+  const killSwitch = asRecord(readiness.kill_switch_state as JsonValue | undefined) || {};
+  const authority = asRecord(authoritySnapshot?.authority_snapshot as JsonValue | undefined) || {};
+  const verifications = asRecord(authority.verifications as JsonValue | undefined) || {};
+  const approvalVerification = asRecord(verifications.approval_records as JsonValue | undefined);
+  const rollbackVerification = asRecord(verifications.rollback as JsonValue | undefined);
+  const linearVerification = asRecord(verifications.linear_writeback as JsonValue | undefined);
+  const githubVerification = asRecord(verifications.github_writeback as JsonValue | undefined);
+  const lanes = queueBands(work);
+  const approvalItems = (work?.queueItems || [])
+    .filter(isRunnerSourceQueueItem)
+    .filter((item) => item.readiness?.hitlClass && item.readiness.hitlClass !== 'No-HITL')
+    .slice(0, 5)
+    .map((item) => ({ id: item.id, title: item.title, reason: item.readiness?.hitlClass || 'approval required' }));
+  const routeHealth = workerRouteHealth(work);
+  const rollbackReasons: string[] = [];
+  if (!rollbackVerification && !fullAutonomyApprovalOk) rollbackReasons.push('rollback_verification_missing');
+  if (rollbackVerification && rollbackVerification.status !== 'pass') rollbackReasons.push(`rollback:${String(rollbackVerification.status || 'unknown')}`);
+  const writebackReasons: string[] = [];
+  if (!linearVerification) writebackReasons.push(fullAutonomyApprovalOk ? 'writeback convergence not yet observed' : 'linear_writeback_verification_missing');
+  if (linearVerification && linearVerification.status !== 'pass') writebackReasons.push(`linear:${String(linearVerification.status || 'unknown')}`);
+  if (githubVerification && githubVerification.status !== 'pass') writebackReasons.push(`github:${String(githubVerification.status || 'unknown')}`);
+  const held = (work?.recentRuns || []).filter((run) => run.status === 'held').length;
+  if (held > 0) writebackReasons.push(`held:${held}`);
+  const approvalState: RunnerAutonomyView['approval']['state'] = approvalVerification?.status === 'pass' || fullAutonomyApprovalOk
+    ? 'valid'
+    : config?.approval_envelope_path || config?.approval_envelope_id
+      ? 'blocked'
+      : 'missing';
+  const rollbackReason = rollbackReasons[0]
+    || (fullAutonomyApprovalOk ? 'rollback covered by approval envelope' : 'rollback verification pass');
+  const operatorActions: RunnerAutonomyView['operatorActions'] = [
+    {
+      id: 'kill_switch',
+      label: 'Kill switch',
+      state: killSwitch.active === true || killSwitch.valid === false ? 'blocked' : 'clear',
+      reason: asString(killSwitch.reason) || 'not reported',
+    },
+    {
+      id: 'approval_queue',
+      label: 'Approval queue',
+      state: approvalItems.length > 0 ? 'attention' : 'clear',
+      reason: `${approvalItems.length} approval-gated item${approvalItems.length === 1 ? '' : 's'}`,
+    },
+    {
+      id: 'rollback',
+      label: 'Rollback',
+      state: rollbackReasons.length > 0 ? 'attention' : 'clear',
+      reason: rollbackReason,
+    },
+    {
+      id: 'writeback',
+      label: 'Writeback',
+      state: writebackReasons.length > 0 ? 'attention' : 'clear',
+      reason: writebackReasons[0] || 'writeback verification pass',
+    },
+  ];
+
+  return {
+    mode,
+    activationMode: activationMode(mode),
+    approval: {
+      state: approvalState,
+      approvalId: asString(config?.approval_envelope_id) || asString(fullAutonomyApproval?.approval_id),
+      path: asString(config?.approval_envelope_path) || asString(fullAutonomyApproval?.path),
+    },
+    dispositions: {
+      summary: {
+        auto_execute: lanes.ready,
+        auto_normalize_then_execute: lanes.needsInfo,
+        auto_review: lanes.reviewOnly,
+        auto_recover: lanes.running,
+        auto_plan: lanes.approvalGated + lanes.completed,
+        blocked_by_policy: lanes.blocked,
+      },
+      lanes,
+    },
+    operatorActions,
+    workerRoutes: Object.entries(routeHealth).map(([route, health]) => ({ route, ...health })),
+    routeHealth,
+    approvalQueue: {
+      count: approvalItems.length,
+      items: approvalItems,
+    },
+    rollbackReadiness: {
+      state: rollbackReasons.length > 0 ? 'attention' : 'ready',
+      reasons: rollbackReasons,
+    },
+    writebackHealth: {
+      state: writebackReasons.length > 0 ? 'attention' : 'converged',
+      held,
+      reasons: writebackReasons,
+    },
+    budget: {
+      timeBudgetSeconds: asNumber(config?.autonomy_time_budget_seconds) || asNumber(fullAutonomyBudgets.time_budget_seconds),
+      tokenBudget: asNumber(config?.autonomy_work_budget) || asNumber(fullAutonomyBudgets.token_budget),
+      costBudgetUsd: asNumber(fullAutonomyBudgets.cost_budget_usd),
+    },
+    killSwitch: {
+      active: asBoolean(killSwitch.active),
+      valid: asBoolean(killSwitch.valid),
+      source: asString(killSwitch.source),
+      reason: asString(killSwitch.reason),
+    },
+    dashboardMutations: 0,
+  };
+}
+
+function activationMode(mode?: string): RunnerAutonomyView['activationMode'] {
+  if (mode === 'full_autonomy_live' || mode === 'full_autonomy_candidate' || mode === 'class_scoped_autonomy' || mode === 'report_only' || mode === 'disabled') {
+    return mode;
+  }
+  return 'unknown';
+}
+
+function queueBands(work: RunnerWorkDigest | null): RunnerAutonomyView['dispositions']['lanes'] {
+  const lanes = {
+    running: 0,
+    ready: 0,
+    needsInfo: 0,
+    approvalGated: 0,
+    reviewOnly: 0,
+    blocked: 0,
+    completed: 0,
+  };
+  for (const item of work?.items || []) {
+    const runnerStatus = item.runner.status.toLowerCase();
+    const state = item.state.name.toLowerCase();
+    const stateType = (item.state.type || '').toLowerCase();
+    if (['claimed', 'launched', 'validating'].includes(runnerStatus) || ['started'].includes(stateType)) {
+      lanes.running += 1;
+      continue;
+    }
+    if (['review', 'in review'].includes(runnerStatus) || state === 'in review') {
+      lanes.reviewOnly += 1;
+      continue;
+    }
+    if (['done', 'completed', 'canceled', 'cancelled'].includes(state) || ['completed', 'canceled'].includes(stateType)) {
+      lanes.completed += 1;
+      continue;
+    }
+    if (['blocked', 'failed', 'quarantined'].includes(runnerStatus)) {
+      lanes.blocked += 1;
+      continue;
+    }
+    if (item.readiness?.hitlClass && item.readiness.hitlClass !== 'No-HITL') {
+      lanes.approvalGated += 1;
+      continue;
+    }
+    if (item.readiness?.verdict === 'missing') {
+      lanes.needsInfo += 1;
+      continue;
+    }
+    if (item.readiness?.verdict === 'ready') {
+      lanes.ready += 1;
+      continue;
+    }
+    lanes.needsInfo += 1;
+  }
+  for (const item of work?.queueItems || []) {
+    const runnerStatus = item.runner.status.toLowerCase();
+    const state = item.state.name.toLowerCase();
+    if (['review', 'in review'].includes(runnerStatus) || state === 'in review') {
+      lanes.reviewOnly += 1;
+      continue;
+    }
+    if (!isRunnerSourceQueueItem(item)) continue;
+    if (item.readiness?.hitlClass && item.readiness.hitlClass !== 'No-HITL') lanes.approvalGated += 1;
+    else if (item.readiness?.verdict === 'ready') lanes.ready += 1;
+    else if (item.readiness?.verdict === 'missing') lanes.needsInfo += 1;
+  }
+  return lanes;
+}
+
+function workerRouteHealth(work: RunnerWorkDigest | null): RunnerAutonomyView['routeHealth'] {
+  const routes: RunnerAutonomyView['routeHealth'] = {};
+  for (const run of work?.recentRuns || []) {
+    const route = run.workerRoute || 'unknown';
+    const current = routes[route] || { state: 'idle' as const, active: 0, recent: 0, health: 'observed' };
+    current.recent += 1;
+    if (['claimed', 'launched', 'validating'].includes(run.status)) current.active += 1;
+    if (['failed', 'blocked', 'quarantined'].includes(run.status)) current.health = run.status;
+    routes[route] = current;
+  }
+  if (!routes.codex_exec) {
+    routes.codex_exec = { state: 'idle', active: 0, recent: 0, health: 'no recent runs' };
+  }
+  for (const route of Object.values(routes)) {
+    route.state = route.active > 0 ? 'active' : route.health === 'observed' || route.health === 'no recent runs' ? 'idle' : 'attention';
+  }
+  return routes;
 }
 
 async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
   const repo = await findRunnerRepo();
   const observedAt = new Date().toISOString();
   const liveDbPath = process.env.RUNNERD_DB_PATH?.trim() || DEFAULT_LIVE_DB_PATH;
+  const liveConfigPath = process.env.RUNNERD_CONFIG_PATH?.trim() || DEFAULT_RUNNERD_CONFIG_PATH;
+  const liveEvidenceRoot = process.env.RUNNERD_EVIDENCE_ROOT?.trim() || DEFAULT_RUNNERD_EVIDENCE_ROOT;
+  const liveWorktreeRoot = process.env.RUNNERD_WORKTREE_ROOT?.trim() || DEFAULT_RUNNERD_WORKTREE_ROOT;
   const liveEvidencePath = process.env.RUNNERD_LIVE_EVIDENCE_PATH?.trim();
   const liveReadinessArgs = liveEvidencePath
     ? ['-m', 'runnerd.cli', 'live-readiness', '--live-evidence', liveEvidencePath, '--json']
@@ -890,6 +1781,21 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
       liveReadiness: null,
       authoritySnapshot: null,
       work: null,
+      webhookQueue: defaultWebhookQueueHealth(),
+      autonomy: {
+        state: 'offline',
+        label: 'Runner offline',
+        tone: 'danger',
+        reasons: ['runnerd_repository_not_found'],
+        liveReady: false,
+        dispatchEnabled: false,
+        activeExecutions: 0,
+        openLinearIssues: 0,
+        readyLinearIssues: 0,
+        dorBlockedLinearIssues: 0,
+        backlogLinearIssues: 0,
+        todoLinearIssues: 0,
+      },
       liveDbPath,
       safety: {
         dashboardMutations: 0,
@@ -898,6 +1804,7 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
         commands: [],
       },
       commands: {},
+      autonomyView: deriveAutonomyView(null, null, null, null),
       error: repo.error,
     };
   }
@@ -905,12 +1812,12 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
   const [gitBranch, gitHead, runnerStatus, runnerDoctor, runnerScan, runnerLiveReadiness, runnerAuthoritySnapshot, runnerWork] = await Promise.all([
     execFileJson('git', ['branch', '--show-current'], repo.repoPath),
     execFileJson('git', ['rev-parse', 'HEAD'], repo.repoPath),
-    execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json', '--db', liveDbPath], repo.repoPath),
+    execFileJson('python3', ['-m', 'runnerd.cli', 'status', '--json', '--config', liveConfigPath, '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'doctor', '--strict', '--json', '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'scan', '--dry-run', '--json', '--db', liveDbPath], repo.repoPath),
     execFileJson('python3', liveReadinessArgs, repo.repoPath),
     execFileJson('python3', ['-m', 'runnerd.cli', 'live', 'authority', 'snapshot', '--json'], repo.repoPath),
-    collectRunnerWorkDigest(repo.repoPath, liveDbPath).catch((err: unknown): RunnerWorkDigest => ({
+    collectRunnerWorkDigest(repo.repoPath, liveDbPath, liveEvidenceRoot, liveWorktreeRoot).catch((err: unknown): RunnerWorkDigest => ({
       ok: false,
       observedAt,
       source: {
@@ -926,12 +1833,19 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
         reviewRuns: 0,
         observedTasks: 0,
         activeLinearIssues: 0,
+        openLinearIssues: 0,
+        readyLinearIssues: 0,
+        dorBlockedLinearIssues: 0,
+        backlogLinearIssues: 0,
+        todoLinearIssues: 0,
         projects: 0,
         lastEventAt: null,
       },
       projects: [],
       items: [],
+      queueItems: [],
       recentRuns: [],
+      cycles: [],
       flow: [],
     })),
   ]);
@@ -943,6 +1857,11 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
     && runnerLiveReadiness.ok && runnerLiveReadiness.json
     && runnerAuthoritySnapshot.ok && runnerAuthoritySnapshot.json,
   );
+  const statusRecord = asRecord(runnerStatus.json);
+  const scanRecord = asRecord(runnerScan.json);
+  const liveReadinessRecord = asRecord(runnerLiveReadiness.json);
+  const authoritySnapshotRecord = asRecord(runnerAuthoritySnapshot.json);
+  const dispatchEnabled = statusRecord?.dispatch_enabled === true;
 
   return {
     ok,
@@ -950,12 +1869,15 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
     repoPath: repo.repoPath,
     branch: singleLine(gitBranch),
     head: singleLine(gitHead),
-    status: asRecord(runnerStatus.json),
+    status: statusRecord,
     doctor: asRecord(runnerDoctor.json),
-    scan: asRecord(runnerScan.json),
-    liveReadiness: asRecord(runnerLiveReadiness.json),
-    authoritySnapshot: asRecord(runnerAuthoritySnapshot.json),
+    scan: scanRecord,
+    liveReadiness: liveReadinessRecord,
+    authoritySnapshot: authoritySnapshotRecord,
     work: runnerWork,
+    webhookQueue: defaultWebhookQueueHealth(),
+    autonomyView: deriveAutonomyView(statusRecord, liveReadinessRecord, authoritySnapshotRecord, runnerWork),
+    autonomy: deriveAutonomy(statusRecord, scanRecord, liveReadinessRecord, runnerWork, dispatchEnabled),
     liveDbPath,
     safety: {
       dashboardMutations: 0,
@@ -964,7 +1886,7 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
       commands: [
         'git branch --show-current',
         'git rev-parse HEAD',
-        `python3 -m runnerd.cli status --json --db ${liveDbPath}`,
+        `python3 -m runnerd.cli status --json --config ${liveConfigPath} --db ${liveDbPath}`,
         `python3 -m runnerd.cli doctor --strict --json --db ${liveDbPath}`,
         `python3 -m runnerd.cli scan --dry-run --json --db ${liveDbPath}`,
         liveEvidencePath

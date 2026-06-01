@@ -49,7 +49,16 @@ export interface RunnerWorkItem {
     lastRunAt?: string;
     lastEventAt?: string;
     lastEventType?: string;
+    artifact?: RunnerWorkerArtifact;
     source: 'runner_db' | 'linear';
+  };
+  readiness?: {
+    verdict: 'ready' | 'missing' | 'non_executable';
+    executable: boolean;
+    hitlClass?: string;
+    missing: string[];
+    refusalCodes: string[];
+    plannedRunDir?: string;
   };
   updatedAt?: string;
   startedAt?: string | null;
@@ -67,10 +76,51 @@ export interface RunnerRunSummary {
   workerStatus?: string;
   validation?: string;
   refusalCode?: string | null;
+  artifact?: RunnerWorkerArtifact;
   createdAt: string;
   updatedAt: string;
   durationMs: number;
   eventType?: string;
+}
+
+export interface RunnerWorkerArtifact {
+  route?: string;
+  packetId?: string;
+  autonomy?: boolean;
+  evidenceDir?: string;
+  worktreePath?: string;
+  workspaceId?: string;
+  finalHead?: string;
+  manifestPresent: boolean;
+  files: Array<{
+    path: string;
+    sha256?: string;
+  }>;
+  command?: {
+    cwd?: string;
+    exitCode?: number | null;
+    stdoutRef?: string;
+    stderrRef?: string;
+    argvRedacted?: string[];
+  };
+  transcriptRef?: string;
+  stderrRef?: string;
+  diffRef?: string;
+  hasDiff: boolean;
+  noDiff: boolean;
+  operatorSummary?: {
+    outcome?: string;
+    nextAction?: string;
+    diffState?: string;
+    changedFiles: string[];
+    validation?: string;
+    refusalCodes: string[];
+    workerDirectWriteback?: string;
+    evidenceRefs: string[];
+    threadId?: string;
+    commandEventCount?: number;
+    workerFinalMessage?: string;
+  };
 }
 
 export interface RunnerWorkDigest {
@@ -90,6 +140,11 @@ export interface RunnerWorkDigest {
     reviewRuns: number;
     observedTasks: number;
     activeLinearIssues: number;
+    openLinearIssues: number;
+    readyLinearIssues: number;
+    dorBlockedLinearIssues: number;
+    backlogLinearIssues: number;
+    todoLinearIssues: number;
     projects: number;
     lastEventAt: string | null;
   };
@@ -104,7 +159,30 @@ export interface RunnerWorkDigest {
     completed: number;
   }>;
   items: RunnerWorkItem[];
+  queueItems: RunnerWorkItem[];
   recentRuns: RunnerRunSummary[];
+  cycles: Array<{
+    id: string;
+    name: string;
+    position: 'current' | 'upcoming' | 'past' | 'uncycled';
+    startsAt?: string;
+    endsAt?: string;
+    completedAt?: string | null;
+    active: number;
+    review: number;
+    backlog: number;
+    todo: number;
+    completed: number;
+    total: number;
+    items: Array<{
+      id: string;
+      title: string;
+      url?: string;
+      state: string;
+      stateType?: string;
+      runnerStatus: string;
+    }>;
+  }>;
   flow: Array<{
     date: string;
     claimed: number;
@@ -196,6 +274,115 @@ export interface RunnerStatusReport {
     };
   } | null;
   work: RunnerWorkDigest | null;
+  webhookQueue: {
+    ok: boolean;
+    state: 'not_configured' | 'unknown' | 'observed';
+    lastValidDelivery: string | null;
+    lastInvalidSignature: string | null;
+    counts: {
+      valid: number;
+      invalidSignature: number;
+      queued: number;
+      handled: number;
+      ignored: number;
+    };
+    queue: {
+      depth: number;
+      lagSeconds: number | null;
+    };
+    consumer: {
+      state: 'not_configured' | 'unknown' | 'healthy' | 'blocked';
+      detail: string;
+    };
+    recent: Array<{
+      observedAt: string;
+      issueKey?: string;
+      eventClass: string;
+      state: string;
+      reason?: string;
+    }>;
+    notes: string[];
+  };
+  autonomy: {
+    state: 'autonomous' | 'idle' | 'report_only' | 'blocked' | 'offline';
+    label: string;
+    tone: 'safe' | 'warning' | 'danger' | 'muted' | 'primary';
+    reasons: string[];
+    mode?: string;
+    liveReady: boolean;
+    dispatchEnabled: boolean;
+    activeExecutions: number;
+    openLinearIssues: number;
+    readyLinearIssues: number;
+    dorBlockedLinearIssues: number;
+    backlogLinearIssues: number;
+    todoLinearIssues: number;
+  };
+  autonomyView: {
+    mode?: string;
+    activationMode: 'full_autonomy_live' | 'full_autonomy_candidate' | 'class_scoped_autonomy' | 'report_only' | 'disabled' | 'unknown';
+    approval: {
+      state: 'valid' | 'missing' | 'blocked' | 'unknown';
+      approvalId?: string;
+      path?: string;
+    };
+    dispositions: {
+      summary: Record<string, number>;
+      lanes: {
+        running: number;
+        ready: number;
+        needsInfo: number;
+        approvalGated: number;
+        reviewOnly: number;
+        blocked: number;
+        completed: number;
+      };
+    };
+    operatorActions: Array<{
+      id: string;
+      label: string;
+      state: 'clear' | 'attention' | 'blocked';
+      reason: string;
+    }>;
+    workerRoutes: Array<{
+      route: string;
+      state: 'active' | 'idle' | 'attention';
+      active: number;
+      recent: number;
+      health: string;
+    }>;
+    routeHealth: Record<string, {
+      state: 'active' | 'idle' | 'attention';
+      active: number;
+      recent: number;
+      health: string;
+    }>;
+    approvalQueue: {
+      count: number;
+      items: Array<{ id: string; title: string; reason: string }>;
+    };
+    rollbackReadiness: {
+      state: 'ready' | 'attention' | 'unknown';
+      reasons: string[];
+    };
+    writebackHealth: {
+      state: 'converged' | 'attention' | 'unknown';
+      held: number;
+      reasons: string[];
+    };
+    budget: {
+      timeBudgetSeconds?: number;
+      tokenBudget?: number;
+      costBudgetUsd?: number;
+    };
+    killSwitch: {
+      active?: boolean;
+      valid?: boolean;
+      source?: string;
+      reason?: string;
+    };
+    dashboardMutations: 0;
+  };
   liveDbPath: string;
   safety: {
     dashboardMutations: 0;
@@ -252,7 +439,7 @@ export function useRunnerStatus(): RunnerStatusState {
 
   useEffect(() => {
     const controller = new AbortController();
-    void refresh(controller.signal);
+    void refresh(controller.signal, { force: true });
     const interval = window.setInterval(() => {
       if (document.visibilityState !== 'hidden') {
         void refresh(undefined, { background: true });
