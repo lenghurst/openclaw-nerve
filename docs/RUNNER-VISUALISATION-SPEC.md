@@ -35,6 +35,8 @@ The endpoint runs only bounded local probes:
 
 The response includes branch/head metadata, the live DB path used for read-only probes, runner status, strict doctor output, dry-run scan output, live-readiness gate output, host authority snapshot output, command success/failure metadata, and an explicit safety block.
 
+For `codex_exec` runs, the response also includes a bounded worker artifact summary from runnerd evidence manifests: evidence directory, worktree path, packet id, transcript/stderr refs, command cwd/exit code, final head, evidence file count, and diff/no-diff marker. It does not include raw prompt text, raw transcript bodies, stderr bodies, secrets, or environment values.
+
 ## Safety Requirements
 
 - Dashboard mutations are always `0`.
@@ -56,6 +58,7 @@ Inside the view:
 - Authority snapshot rows show observed service, DB, kill switch, credential-reference, worker, evidence, writeback, rollback, and approval-record state without exposing secret values.
 - Safety and command probes are secondary panels using `cockpit-note`, `shell-panel`, mono command text, and existing green/orange/destructive tones.
 - Raw JSON is available for auditability but visually secondary.
+- `codex_exec` worker artifact blocks appear on active work and recent outcomes using compact Nerve chips and path rows. They make the isolated worktree visible without representing the worker as an OpenClaw Agent session.
 
 ## Acceptance Checks
 
@@ -64,6 +67,8 @@ Inside the view:
 - `/api/runner/status` works in a local Hono probe and returns no mutations.
 - The frontend bundle contains the Runner route and fetches `/api/runner/status`.
 - Playwright visual checks confirm the Runner button and panel render at desktop and mobile widths without overlap.
+- The gateway connection dialog must not cover the Runner view; Runner status is a server-side read-only surface and remains inspectable when the OpenClaw gateway is offline.
+- Component tests confirm `codex_exec` worker route, evidence directory, isolated worktree path, transcript ref, no-diff/diff marker, and packet id render from the status contract.
 - DB health is read from the configured live DB path, while live-readiness remains the source of truth for whether that DB proof can count toward live activation.
 - Hosted deployment, if performed, preserves OAuth protection on `https://oliver-longhurst.co.uk`.
 

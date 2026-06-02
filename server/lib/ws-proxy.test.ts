@@ -15,6 +15,7 @@ vi.mock('./config.js', () => {
       sslPort: 3443,
       sessionSecret: 'test-secret',
       gatewayToken: 'test-token',
+      gatewayUrl: 'http://127.0.0.1:18789',
     },
     WS_ALLOWED_HOSTS,
     SESSION_COOKIE_NAME: 'nerve_session_3080',
@@ -52,7 +53,7 @@ import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock } from './device-identity.js';
 import { createServer as createHttpServer } from 'node:http';
 
-const mockedConfig = config as { auth: boolean; sessionSecret: string };
+const mockedConfig = config as { auth: boolean; sessionSecret: string; gatewayUrl: string };
 const mockedVerifySession = verifySession as ReturnType<typeof vi.fn>;
 const mockedParseSessionCookie = parseSessionCookie as ReturnType<typeof vi.fn>;
 
@@ -112,6 +113,7 @@ describe('ws-proxy', () => {
     mockedVerifySession.mockReset();
     mockedParseSessionCookie.mockReset();
     mockGw.clearReceived();
+    mockedConfig.gatewayUrl = mockGw.url.replace(/^ws:/, 'http:');
 
     // Create a new HTTP server and attach ws-proxy
     proxyServer = createServer();
@@ -152,15 +154,34 @@ describe('ws-proxy', () => {
       expect(reason).toContain('not allowed');
     });
 
-    it('allows root path for gateway target', async () => {
+    it('rejects root path for gateway target', async () => {
       const ws = new WebSocket(
         `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url)}`,
       );
-      const msg = await waitForMessage(ws);
-      const parsed = JSON.parse(msg);
-      expect(parsed.type).toBe('event');
-      expect(parsed.event).toBe('connect.challenge');
-      ws.close();
+      const { code, reason } = await waitForClose(ws);
+      expect(code).toBe(1008);
+      expect(reason).toContain('Target not allowed');
+    });
+
+    it('rejects localhost alias, wrong path, query/hash, credentials, and alternate scheme', async () => {
+      const allowed = new URL(mockGw.url + '/ws');
+      const badTargets = [
+        `ws://localhost:${allowed.port}/ws`,
+        `${mockGw.url}/`,
+        `${mockGw.url}/ws?debug=1`,
+        `${mockGw.url}/ws#fragment`,
+        `ws://user:pass@127.0.0.1:${allowed.port}/ws`,
+        `wss://127.0.0.1:${allowed.port}/ws`,
+      ];
+
+      for (const badTarget of badTargets) {
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(badTarget)}`,
+        );
+        const { code, reason } = await waitForClose(ws);
+        expect([1008, 1006]).toContain(code);
+        if (code === 1008) expect(reason).toContain('Target not allowed');
+      }
     });
 
     it('accepts connections to allowed gateway target', async () => {
@@ -191,6 +212,20 @@ describe('ws-proxy', () => {
       const { code, reason } = await waitForCloseOrError(ws);
       expect(code).toBe(1006);
       expect(reason).toContain('Unexpected server response: 403');
+    });
+
+
+    it('rejects missing Origin on public-host websocket upgrades before auth', async () => {
+      mockedConfig.auth = true;
+      mockedParseSessionCookie.mockReturnValue(null);
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,
+        { headers: { Host: 'oliver-longhurst.co.uk' } },
+      );
+      const { code, reason } = await waitForCloseOrError(ws);
+      expect(code).toBe(1006);
+      expect(reason).toContain('Unexpected server response: 403');
+      expect(mockedParseSessionCookie).not.toHaveBeenCalled();
     });
   });
 
@@ -540,10 +575,11 @@ describe('ws-proxy', () => {
       });
       const addr = ncServer.address();
       const ncPort = typeof addr === 'object' && addr ? addr.port : 0;
+      mockedConfig.gatewayUrl = `http://127.0.0.1:${ncPort}`;
 
       try {
         const ws = new WebSocket(
-          `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(`ws://127.0.0.1:${ncPort}`)}`,
+          `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(`ws://127.0.0.1:${ncPort}/ws`)}`,
         );
         await new Promise<void>((resolve) => ws.on('open', resolve));
 
@@ -655,10 +691,11 @@ describe('ws-proxy', () => {
       });
       const addr = delayedServer.address();
       const delayedPort = typeof addr === 'object' && addr ? addr.port : 0;
+      mockedConfig.gatewayUrl = `http://127.0.0.1:${delayedPort}`;
 
       try {
         const ws = new WebSocket(
-          `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(`ws://127.0.0.1:${delayedPort}`)}`,
+          `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(`ws://127.0.0.1:${delayedPort}/ws`)}`,
         );
         await new Promise<void>((resolve) => ws.on('open', resolve));
 
@@ -759,6 +796,7 @@ describe('ws-proxy observability', () => {
 
   beforeEach(async () => {
     (config as { auth: boolean }).auth = false;
+    (config as { gatewayUrl: string }).gatewayUrl = mockGw2.url.replace(/^ws:/, 'http:');
     proxyServer2 = createServer();
     setupWebSocketProxy(proxyServer2);
     await new Promise<void>((resolve) => {

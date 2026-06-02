@@ -12,6 +12,8 @@ The Runner dashboard is the present-tense view of Runner work inside Nerve. It s
 
 It is not a raw runner diagnostics page. Probe commands, JSON reports, and readiness internals are agent/operator support data and should not dominate the end-user view.
 
+The canonical operator surface is the production Nerve deployment at `https://oliver-longhurst.co.uk`. Local Vite ports are development-only and must not be presented as the live Runner dashboard.
+
 ## Data Model
 
 The page combines two read-only sources:
@@ -38,6 +40,7 @@ Secondary content:
 
 - Linear project rollup with total, active, review, and completed counts.
 - Recent Runner outcomes from SQLite.
+- `codex_exec` worker artifact summaries: evidence directory, isolated worktree path, transcript ref, command exit code, packet id, final head, and diff/no-diff marker.
 - Execution history over recent days: claimed, launched, resolved, and validated event counts.
 
 Tertiary content:
@@ -58,5 +61,8 @@ Tertiary content:
 ## Current Limitations
 
 - Linear cycles are shown when present; the current runner issues do not appear to be assigned to cycles.
-- Subsessions are not yet represented as first-class Runner work units. The page currently shows worker refs and recent runs. A future Runner protocol should persist subsession/session references if they need dashboard visibility.
+- `codex_exec` workers are represented as Runner workers with evidence/worktree metadata, not as OpenClaw Agent sessions.
+- Subsessions are not yet represented as first-class Runner work units. A future `openclaw_session` route should persist session references if native Agent visibility is needed.
 - Linear-to-Codex Desktop start automation is still a separate protocol. The dashboard stays read-only until that route is explicit, authenticated, and tested.
+
+See also: `RUNNER-CODEX-EXEC-VISIBILITY-SPEC.md`.

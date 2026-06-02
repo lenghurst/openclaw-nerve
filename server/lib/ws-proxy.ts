@@ -19,7 +19,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { randomUUID } from 'node:crypto';
-import { config, WS_ALLOWED_HOSTS, SESSION_COOKIE_NAME } from './config.js';
+import { config, SESSION_COOKIE_NAME } from './config.js';
 import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock, getDeviceIdentity } from './device-identity.js';
 import { gatewayRpcCall } from './gateway-rpc.js';
@@ -40,6 +40,30 @@ const RESTRICTED_METHODS = new Set([
   'sessions.compact',
 ]);
 const CONTROL_UI_CLIENT_ID = 'openclaw-control-ui';
+
+/**
+ * The browser may only relay to the configured OpenClaw Gateway websocket
+ * endpoint. This is intentionally exact string equality after deriving the
+ * expected `/ws` URL from `config.gatewayUrl`: no localhost aliases, alternate
+ * ports, paths, query/hash fragments, credentials, or scheme variants.
+ */
+function isLoopbackHostHeader(hostHeader: string | string[] | undefined): boolean {
+  const rawHost = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+  if (!rawHost) return false;
+  const lower = rawHost.trim().toLowerCase();
+  const host = lower.startsWith('[') ? lower.slice(1, lower.indexOf(']')) : lower.split(':')[0];
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+function expectedGatewayWsTarget(): string {
+  try {
+    const gatewayUrl = new URL(config.gatewayUrl);
+    const protocol = gatewayUrl.protocol === 'https:' || gatewayUrl.protocol === 'wss:' ? 'wss:' : 'ws:';
+    return `${protocol}//${gatewayUrl.host}/ws`;
+  } catch {
+    return 'ws://127.0.0.1:18789/ws';
+  }
+}
 
 /**
  * Execute a gateway RPC call, bypassing webchat restrictions.
@@ -75,6 +99,11 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (req.url?.startsWith('/ws')) {
       const originHeader = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!originHeader && !isLoopbackHostHeader(req.headers.host)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nOrigin required');
+        socket.destroy();
+        return;
+      }
       if (!isAllowedOrigin(originHeader)) {
         socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nOrigin not allowed');
         socket.destroy();
@@ -117,16 +146,10 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
       return;
     }
 
-    if (!['ws:', 'wss:'].includes(targetUrl.protocol) || !WS_ALLOWED_HOSTS.has(targetUrl.hostname)) {
-      console.warn(`${tag} Rejected: target not allowed: ${target}`);
+    const allowedTarget = expectedGatewayWsTarget();
+    if (target !== allowedTarget) {
+      console.warn(`${tag} Rejected: target not allowed: ${target}; expected ${allowedTarget}`);
       clientWs.close(1008, 'Target not allowed');
-      return;
-    }
-
-    const targetPort = Number(targetUrl.port) || (targetUrl.protocol === 'wss:' ? 443 : 80);
-    if (targetPort < 1 || targetPort > 65535) {
-      console.warn(`${tag} Rejected: invalid port ${targetPort}`);
-      clientWs.close(1008, 'Invalid target port');
       return;
     }
 
