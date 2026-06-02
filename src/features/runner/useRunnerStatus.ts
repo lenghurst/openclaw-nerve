@@ -276,7 +276,7 @@ export interface RunnerStatusReport {
   work: RunnerWorkDigest | null;
   webhookQueue: {
     ok: boolean;
-    state: 'not_configured' | 'unknown' | 'observed';
+    state: 'not_configured' | 'unknown' | 'observed' | 'unavailable';
     lastValidDelivery: string | null;
     lastInvalidSignature: string | null;
     counts: {
@@ -289,10 +289,26 @@ export interface RunnerStatusReport {
     queue: {
       depth: number;
       lagSeconds: number | null;
+      stale: boolean;
     };
     consumer: {
       state: 'not_configured' | 'unknown' | 'healthy' | 'blocked';
       detail: string;
+    };
+    handling: {
+      state: 'not_configured' | 'observed' | 'unavailable';
+      latestAt: string | null;
+      classifications: {
+        acceptedIngress: number;
+        invalidRefusal: number;
+        queuePersistence: number;
+        emptyQueue: number;
+        ignoredDelivery: number;
+        consumedNoopWake: number;
+        unavailableState: number;
+        duplicateReplay: number;
+        staleQueue: number;
+      };
     };
     recent: Array<{
       observedAt: string;
@@ -300,6 +316,7 @@ export interface RunnerStatusReport {
       eventClass: string;
       state: string;
       reason?: string;
+      classification?: string;
     }>;
     notes: string[];
   };

@@ -690,14 +690,16 @@ function WebhookQueueSummary({ report }: { report: RunnerStatusReport | null }) 
         <div className="cockpit-note m-3 text-sm">No webhook queue status captured.</div>
       ) : (
         <div className="grid gap-3 p-3">
-          <div className="grid gap-2 sm:grid-cols-3">
-            <MetricTile icon={<Activity size={14} aria-hidden="true" />} label="Queue depth" value={webhook.queue.depth} caption={webhook.queue.lagSeconds === null ? 'lag unknown' : `${webhook.queue.lagSeconds}s lag`} tone={webhook.queue.depth > 0 ? 'warning' : 'safe'} />
+          <div className="grid gap-2 sm:grid-cols-4">
+            <MetricTile icon={<Activity size={14} aria-hidden="true" />} label="Queue depth" value={webhook.queue.depth} caption={webhook.queue.stale ? 'stale queue' : webhook.queue.lagSeconds === null ? 'lag unknown' : `${webhook.queue.lagSeconds}s lag`} tone={webhook.queue.stale ? 'danger' : webhook.queue.depth > 0 ? 'warning' : 'safe'} />
             <MetricTile icon={<CheckCircle2 size={14} aria-hidden="true" />} label="Valid" value={webhook.counts.valid} caption={webhook.lastValidDelivery ? formatObservedAt(webhook.lastValidDelivery) : 'none observed'} tone={webhook.counts.valid > 0 ? 'safe' : 'muted'} />
             <MetricTile icon={<AlertTriangle size={14} aria-hidden="true" />} label="Rejected" value={webhook.counts.invalidSignature} caption={webhook.lastInvalidSignature ? formatObservedAt(webhook.lastInvalidSignature) : 'none observed'} tone={webhook.counts.invalidSignature > 0 ? 'danger' : 'safe'} />
+            <MetricTile icon={<ShieldCheck size={14} aria-hidden="true" />} label="Handled" value={webhook.counts.handled} caption={`${webhook.counts.ignored} ignored`} tone={webhook.counts.handled > 0 ? 'safe' : webhook.counts.ignored > 0 ? 'warning' : 'muted'} />
           </div>
           <div className="rounded-2xl border border-border/60 bg-background/48 px-3 py-2 text-[0.733rem] text-muted-foreground">
             <div className="font-medium text-foreground">{webhook.consumer.detail}</div>
             <div className="mt-1">Events are visibility signals only; this dashboard cannot replay events or authorise Runner mutation.</div>
+            <div className="mt-1 font-mono text-[0.667rem]">handling={webhook.handling.state} accepted={webhook.handling.classifications.acceptedIngress} queued={webhook.handling.classifications.queuePersistence} duplicate={webhook.handling.classifications.duplicateReplay}</div>
           </div>
           {webhook.recent.length > 0 && (
             <div className="divide-y divide-border/50 rounded-2xl border border-border/60">
@@ -706,7 +708,7 @@ function WebhookQueueSummary({ report }: { report: RunnerStatusReport | null }) 
                   <div className="font-mono text-muted-foreground">{formatShortTime(event.observedAt)}</div>
                   <div className="min-w-0">
                     <div className="truncate text-foreground">{event.issueKey ? `${event.issueKey} ` : ''}{event.eventClass}</div>
-                    <div className="truncate text-muted-foreground">{event.state}{event.reason ? `: ${event.reason}` : ''}</div>
+                    <div className="truncate text-muted-foreground">{event.classification ? `${event.classification} / ` : ''}{event.state}{event.reason ? `: ${event.reason}` : ''}</div>
                   </div>
                 </div>
               ))}

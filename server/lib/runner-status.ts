@@ -326,7 +326,7 @@ interface RunnerAutonomyView {
 
 interface RunnerWebhookQueueHealth {
   ok: boolean;
-  state: 'not_configured' | 'unknown' | 'observed';
+  state: 'not_configured' | 'unknown' | 'observed' | 'unavailable';
   lastValidDelivery: string | null;
   lastInvalidSignature: string | null;
   counts: {
@@ -339,10 +339,26 @@ interface RunnerWebhookQueueHealth {
   queue: {
     depth: number;
     lagSeconds: number | null;
+    stale: boolean;
   };
   consumer: {
     state: 'not_configured' | 'unknown' | 'healthy' | 'blocked';
     detail: string;
+  };
+  handling: {
+    state: 'not_configured' | 'observed' | 'unavailable';
+    latestAt: string | null;
+    classifications: {
+      acceptedIngress: number;
+      invalidRefusal: number;
+      queuePersistence: number;
+      emptyQueue: number;
+      ignoredDelivery: number;
+      consumedNoopWake: number;
+      unavailableState: number;
+      duplicateReplay: number;
+      staleQueue: number;
+    };
   };
   recent: Array<{
     observedAt: string;
@@ -350,6 +366,7 @@ interface RunnerWebhookQueueHealth {
     eventClass: string;
     state: string;
     reason?: string;
+    classification?: string;
   }>;
   notes: string[];
 }
@@ -362,11 +379,14 @@ const DEFAULT_RUNNERD_EVIDENCE_ROOT = '/home/ubuntu/.local/state/openclaw-runner
 const DEFAULT_RUNNERD_WORKTREE_ROOT = '/home/ubuntu/.local/state/openclaw-runner/worktrees';
 const DEFAULT_LINEAR_SECRETS_PATH = '/home/ubuntu/.config/runnerd/secrets.env';
 const DEFAULT_LINEAR_WEBHOOK_QUEUE_PATH = '/home/ubuntu/queue/inbox.jsonl';
+const DEFAULT_LINEAR_WEBHOOK_STATUS_PATH = '/home/ubuntu/queue/webhook-status.jsonl';
 const DEFAULT_LINEAR_PROJECT = 'runner';
 const LINEAR_TIMEOUT_MS = 2500;
 const DEFAULT_STATUS_CACHE_MS = 10_000;
 const WEBHOOK_QUEUE_MAX_BYTES = 1024 * 1024;
+const WEBHOOK_STATUS_MAX_BYTES = 1024 * 1024;
 const WEBHOOK_QUEUE_RECENT_LIMIT = 5;
+const WEBHOOK_QUEUE_STALE_SECONDS = 300;
 
 let cachedStatus: { report: RunnerStatusReport; cachedAt: number } | null = null;
 let pendingStatus: Promise<RunnerStatusReport> | null = null;
@@ -737,60 +757,78 @@ function isReadyForRunnerClaim(item: RunnerWorkItem): boolean {
 
 export async function collectWebhookQueueHealth(observedAt: string): Promise<RunnerWebhookQueueHealth> {
   const queuePath = process.env.RUNNER_LINEAR_WEBHOOK_QUEUE_PATH?.trim() || DEFAULT_LINEAR_WEBHOOK_QUEUE_PATH;
+  const handling = await collectWebhookHandlingStatus(observedAt);
   try {
     const queueStat = await stat(queuePath);
     if (!queueStat.isFile()) {
       return webhookQueueUnavailable(
-        'unknown',
+        'unavailable',
         'blocked',
         'Configured Linear webhook queue path is not a regular file.',
         ['Webhook queue path is present but cannot be read as a queue file.'],
+        handling,
       );
     }
     if (queueStat.size > WEBHOOK_QUEUE_MAX_BYTES) {
       return webhookQueueUnavailable(
-        'unknown',
+        'unavailable',
         'blocked',
         'Linear webhook queue exceeds dashboard read limit.',
         ['Queue depth is not reported because the queue file is larger than the read-only dashboard limit.'],
+        handling,
       );
     }
 
     const raw = queueStat.size > 0 ? await readFile(queuePath, 'utf8') : '';
     const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean);
-    const recent = lines
+    const queueRecent = lines
       .slice(-WEBHOOK_QUEUE_RECENT_LIMIT)
       .map((line) => parseWebhookQueueLine(line, queueStat.mtime.toISOString()))
       .filter((item): item is RunnerWebhookQueueHealth['recent'][number] => item !== null);
+    const lagSeconds = lines.length > 0 ? Math.max(0, Math.floor((Date.parse(observedAt) - queueStat.mtime.getTime()) / 1000)) : null;
+    const stale = lagSeconds !== null && lagSeconds >= WEBHOOK_QUEUE_STALE_SECONDS;
+    const recent = [...queueRecent, ...handling.recent]
+      .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))
+      .slice(0, WEBHOOK_QUEUE_RECENT_LIMIT);
+    const invalidSignature = handling.events.filter(
+      (item) => item.classification === 'invalid_refusal' && item.reason === 'invalid_signature',
+    );
+    const acceptedIngress = handling.events.filter((item) => item.classification === 'accepted_ingress');
+    const handled = handling.events.filter((item) => (
+      item.classification === 'consumed_noop_wake'
+      || item.state === 'handled'
+    ));
+    const ignored = handling.events.filter((item) => item.classification === 'ignored_delivery');
+    const notes = [
+      'Webhook events are request signals only.',
+      'Dashboard status is read-only and cannot replay, forge, dispatch, or mutate webhook events.',
+      'Handling classifications come only from the sanitized webhook status ledger; raw payloads and signatures are not read.',
+      ...handling.notes,
+    ];
+    const consumer = describeWebhookConsumer(lines.length, stale, handling);
+    const handlingSummary = withObservedQueueClassifications(handling.summary, lines.length, stale);
 
     return {
       ok: true,
       state: 'observed',
-      lastValidDelivery: null,
-      lastInvalidSignature: null,
+      lastValidDelivery: acceptedIngress[0]?.observedAt || null,
+      lastInvalidSignature: invalidSignature[0]?.observedAt || null,
       counts: {
-        valid: 0,
-        invalidSignature: 0,
+        valid: acceptedIngress.length,
+        invalidSignature: invalidSignature.length,
         queued: lines.length,
-        handled: 0,
-        ignored: recent.filter((item) => item.state === 'ignored').length,
+        handled: handled.length,
+        ignored: ignored.length,
       },
       queue: {
         depth: lines.length,
-        lagSeconds: lines.length > 0 ? Math.max(0, Math.floor((Date.parse(observedAt) - queueStat.mtime.getTime()) / 1000)) : null,
+        lagSeconds,
+        stale,
       },
-      consumer: {
-        state: 'unknown',
-        detail: lines.length > 0
-          ? 'Queue file has pending entries; consumer completion is not inferred by the read-only dashboard.'
-          : 'Queue file observed empty; delivery acceptance and consumer completion require ingress instrumentation.',
-      },
+      consumer,
+      handling: handlingSummary,
       recent,
-      notes: [
-        'Webhook events are request signals only.',
-        'Dashboard status is read-only and cannot replay, forge, dispatch, or mutate webhook events.',
-        'Signature acceptance/refusal counts are not inferred from queue file contents.',
-      ],
+      notes,
     };
   } catch (err) {
     const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: unknown }).code) : 'unknown_error';
@@ -802,8 +840,111 @@ export async function collectWebhookQueueHealth(observedAt: string): Promise<Run
         ? 'Linear webhook queue file was not found at the configured path.'
         : 'Linear webhook queue file could not be inspected by the read-only dashboard.',
       [`queue_inspection_${code}`],
+      handling,
     );
   }
+}
+
+async function collectWebhookHandlingStatus(
+  observedAt: string,
+): Promise<{
+  summary: RunnerWebhookQueueHealth['handling'];
+  events: RunnerWebhookQueueHealth['recent'];
+  recent: RunnerWebhookQueueHealth['recent'];
+  notes: string[];
+}> {
+  const statusPath = process.env.RUNNER_LINEAR_WEBHOOK_STATUS_PATH?.trim() || DEFAULT_LINEAR_WEBHOOK_STATUS_PATH;
+  const empty = emptyWebhookHandling('not_configured');
+  try {
+    const statusStat = await stat(statusPath);
+    if (!statusStat.isFile()) {
+      return {
+        summary: emptyWebhookHandling('unavailable'),
+        events: [],
+        recent: [],
+        notes: ['Webhook status ledger path is present but is not a regular file.'],
+      };
+    }
+    if (statusStat.size > WEBHOOK_STATUS_MAX_BYTES) {
+      return {
+        summary: emptyWebhookHandling('unavailable'),
+        events: [],
+        recent: [],
+        notes: ['Webhook status ledger exceeds dashboard read limit.'],
+      };
+    }
+
+    const raw = statusStat.size > 0 ? await readFile(statusPath, 'utf8') : '';
+    const events = raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => parseWebhookStatusLine(line, statusStat.mtime.toISOString()))
+      .filter((item): item is RunnerWebhookQueueHealth['recent'][number] => item !== null)
+      .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt));
+    const classifications = summarizeWebhookClassifications(events, observedAt);
+    return {
+      summary: {
+        state: 'observed',
+        latestAt: events[0]?.observedAt || null,
+        classifications,
+      },
+      events,
+      recent: events.slice(0, WEBHOOK_QUEUE_RECENT_LIMIT),
+      notes: events.length > 0 ? [] : ['Webhook status ledger is present but empty.'],
+    };
+  } catch (err) {
+    const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: unknown }).code) : 'unknown_error';
+    if (code === 'ENOENT') {
+      return {
+        summary: empty,
+        events: [],
+        recent: [],
+        notes: ['Webhook status ledger is not configured yet.'],
+      };
+    }
+    return {
+      summary: emptyWebhookHandling('unavailable'),
+      events: [],
+      recent: [],
+      notes: [`webhook_status_inspection_${code}`],
+    };
+  }
+}
+
+function describeWebhookConsumer(
+  queueDepth: number,
+  stale: boolean,
+  handling: Awaited<ReturnType<typeof collectWebhookHandlingStatus>>,
+): RunnerWebhookQueueHealth['consumer'] {
+  if (stale) {
+    return {
+      state: 'blocked',
+      detail: 'Queue file has pending entries past the stale threshold; consumer completion is not proven.',
+    };
+  }
+  if (queueDepth > 0) {
+    return {
+      state: 'unknown',
+      detail: 'Queue file has pending entries; consumer completion is not inferred by the read-only dashboard.',
+    };
+  }
+  if (handling.summary.state === 'observed' && handling.summary.latestAt) {
+    return {
+      state: 'healthy',
+      detail: 'Queue file is empty and sanitized webhook handling classifications are available.',
+    };
+  }
+  if (handling.summary.state === 'unavailable') {
+    return {
+      state: 'unknown',
+      detail: 'Queue file is empty, but the webhook status ledger could not be inspected.',
+    };
+  }
+  return {
+    state: 'unknown',
+    detail: 'Queue file observed empty; delivery acceptance and consumer completion require ingress instrumentation.',
+  };
 }
 
 function webhookQueueUnavailable(
@@ -811,6 +952,12 @@ function webhookQueueUnavailable(
   consumerState: RunnerWebhookQueueHealth['consumer']['state'],
   detail: string,
   notes: string[],
+  handling: Awaited<ReturnType<typeof collectWebhookHandlingStatus>> = {
+    summary: emptyWebhookHandling('not_configured'),
+    events: [],
+    recent: [],
+    notes: [],
+  },
 ): RunnerWebhookQueueHealth {
   return {
     ok: false,
@@ -827,13 +974,15 @@ function webhookQueueUnavailable(
     queue: {
       depth: 0,
       lagSeconds: null,
+      stale: false,
     },
     consumer: {
       state: consumerState,
       detail,
     },
+    handling: handling.summary,
     recent: [],
-    notes,
+    notes: [...notes, ...handling.notes],
   };
 }
 
@@ -863,6 +1012,7 @@ function parseWebhookQueueLine(
       issueKey,
       eventClass: safeSingleLine(eventType),
       state: safeSingleLine(state),
+      classification: 'queue_persistence',
       ...(reason ? { reason: safeSingleLine(reason) } : {}),
     };
   } catch {
@@ -871,8 +1021,131 @@ function parseWebhookQueueLine(
       eventClass: 'unparsed_queue_line',
       state: 'queued',
       reason: 'queue line was not JSON',
+      classification: 'queue_persistence',
     };
   }
+}
+
+function parseWebhookStatusLine(
+  line: string,
+  fallbackObservedAt: string,
+): RunnerWebhookQueueHealth['recent'][number] | null {
+  try {
+    const record = asRecord(JSON.parse(line));
+    if (!record) return null;
+    const issueRecord = asRecord(record.issue);
+    const classification = stringValue(record.classification) || stringValue(record.kind) || 'unknown';
+    const eventClass = stringValue(record.eventClass)
+      || [stringValue(record.type), stringValue(record.action)].filter(Boolean).join('.')
+      || 'webhook_status';
+    const state = stringValue(record.state) || classification;
+    const reason = stringValue(record.reason);
+    const observed = stringValue(record.observedAt)
+      || stringValue(record.createdAt)
+      || stringValue(record.timestamp)
+      || fallbackObservedAt;
+    const issueKey = stringValue(record.issueKey)
+      || stringValue(record.identifier)
+      || stringValue(issueRecord?.identifier)
+      || issueKeyFromText(stringValue(record.title) || stringValue(issueRecord?.title) || '');
+    return {
+      observedAt: observed,
+      issueKey,
+      eventClass: safeSingleLine(eventClass),
+      state: safeSingleLine(state),
+      classification: safeSingleLine(classification),
+      ...(reason ? { reason: safeSingleLine(reason) } : {}),
+    };
+  } catch {
+    return {
+      observedAt: fallbackObservedAt,
+      eventClass: 'unparsed_status_line',
+      state: 'unavailable',
+      reason: 'status line was not JSON',
+      classification: 'unavailable_state',
+    };
+  }
+}
+
+function emptyWebhookHandling(state: RunnerWebhookQueueHealth['handling']['state']): RunnerWebhookQueueHealth['handling'] {
+  return {
+    state,
+    latestAt: null,
+    classifications: {
+      acceptedIngress: 0,
+      invalidRefusal: 0,
+      queuePersistence: 0,
+      emptyQueue: 0,
+      ignoredDelivery: 0,
+      consumedNoopWake: 0,
+      unavailableState: 0,
+      duplicateReplay: 0,
+      staleQueue: 0,
+    },
+  };
+}
+
+function withObservedQueueClassifications(
+  handling: RunnerWebhookQueueHealth['handling'],
+  queueDepth: number,
+  stale: boolean,
+): RunnerWebhookQueueHealth['handling'] {
+  return {
+    ...handling,
+    classifications: {
+      ...handling.classifications,
+      emptyQueue: queueDepth === 0 ? handling.classifications.emptyQueue + 1 : handling.classifications.emptyQueue,
+      staleQueue: stale ? handling.classifications.staleQueue + 1 : handling.classifications.staleQueue,
+    },
+  };
+}
+
+function summarizeWebhookClassifications(
+  events: RunnerWebhookQueueHealth['recent'],
+  observedAt: string,
+): RunnerWebhookQueueHealth['handling']['classifications'] {
+  const summary = emptyWebhookHandling('observed').classifications;
+  for (const event of events) {
+    switch (event.classification) {
+      case 'accepted_ingress':
+        summary.acceptedIngress++;
+        break;
+      case 'invalid_refusal':
+        summary.invalidRefusal++;
+        break;
+      case 'queue_persistence':
+        summary.queuePersistence++;
+        break;
+      case 'empty_queue':
+        summary.emptyQueue++;
+        break;
+      case 'ignored_delivery':
+        summary.ignoredDelivery++;
+        break;
+      case 'consumed_noop_wake':
+        summary.consumedNoopWake++;
+        break;
+      case 'unavailable_state':
+        summary.unavailableState++;
+        break;
+      case 'duplicate_replay':
+        summary.duplicateReplay++;
+        break;
+      case 'stale_queue':
+        summary.staleQueue++;
+        break;
+      default:
+        break;
+    }
+  }
+  const latestQueuePersistence = events.find((event) => event.classification === 'queue_persistence');
+  if (latestQueuePersistence) {
+    const lagSeconds = Math.max(0, Math.floor((Date.parse(observedAt) - Date.parse(latestQueuePersistence.observedAt)) / 1000));
+    if (lagSeconds >= WEBHOOK_QUEUE_STALE_SECONDS) {
+      summary.staleQueue++;
+    }
+  }
+  return summary;
 }
 
 function stringValue(value: unknown): string | undefined {
