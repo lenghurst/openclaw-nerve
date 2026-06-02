@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 type JsonRecord = Record<string, unknown>;
@@ -361,9 +361,12 @@ const DEFAULT_RUNNERD_CONFIG_PATH = '/home/ubuntu/.config/runnerd/config.toml';
 const DEFAULT_RUNNERD_EVIDENCE_ROOT = '/home/ubuntu/.local/state/openclaw-runner/evidence';
 const DEFAULT_RUNNERD_WORKTREE_ROOT = '/home/ubuntu/.local/state/openclaw-runner/worktrees';
 const DEFAULT_LINEAR_SECRETS_PATH = '/home/ubuntu/.config/runnerd/secrets.env';
+const DEFAULT_LINEAR_WEBHOOK_QUEUE_PATH = '/home/ubuntu/queue/inbox.jsonl';
 const DEFAULT_LINEAR_PROJECT = 'runner';
 const LINEAR_TIMEOUT_MS = 2500;
 const DEFAULT_STATUS_CACHE_MS = 10_000;
+const WEBHOOK_QUEUE_MAX_BYTES = 1024 * 1024;
+const WEBHOOK_QUEUE_RECENT_LIMIT = 5;
 
 let cachedStatus: { report: RunnerStatusReport; cachedAt: number } | null = null;
 let pendingStatus: Promise<RunnerStatusReport> | null = null;
@@ -616,7 +619,7 @@ function singleLine(result: CommandResult): string | null {
   return result.stdout.split('\n')[0]?.trim() || null;
 }
 
-function asRecord(value: JsonValue | undefined): JsonRecord | null {
+function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
 }
 
@@ -732,10 +735,86 @@ function isReadyForRunnerClaim(item: RunnerWorkItem): boolean {
   return isReadyForRunner(item) && isRunnerSourceQueueItem(item);
 }
 
-function defaultWebhookQueueHealth(): RunnerWebhookQueueHealth {
+export async function collectWebhookQueueHealth(observedAt: string): Promise<RunnerWebhookQueueHealth> {
+  const queuePath = process.env.RUNNER_LINEAR_WEBHOOK_QUEUE_PATH?.trim() || DEFAULT_LINEAR_WEBHOOK_QUEUE_PATH;
+  try {
+    const queueStat = await stat(queuePath);
+    if (!queueStat.isFile()) {
+      return webhookQueueUnavailable(
+        'unknown',
+        'blocked',
+        'Configured Linear webhook queue path is not a regular file.',
+        ['Webhook queue path is present but cannot be read as a queue file.'],
+      );
+    }
+    if (queueStat.size > WEBHOOK_QUEUE_MAX_BYTES) {
+      return webhookQueueUnavailable(
+        'unknown',
+        'blocked',
+        'Linear webhook queue exceeds dashboard read limit.',
+        ['Queue depth is not reported because the queue file is larger than the read-only dashboard limit.'],
+      );
+    }
+
+    const raw = queueStat.size > 0 ? await readFile(queuePath, 'utf8') : '';
+    const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean);
+    const recent = lines
+      .slice(-WEBHOOK_QUEUE_RECENT_LIMIT)
+      .map((line) => parseWebhookQueueLine(line, queueStat.mtime.toISOString()))
+      .filter((item): item is RunnerWebhookQueueHealth['recent'][number] => item !== null);
+
+    return {
+      ok: true,
+      state: 'observed',
+      lastValidDelivery: null,
+      lastInvalidSignature: null,
+      counts: {
+        valid: 0,
+        invalidSignature: 0,
+        queued: lines.length,
+        handled: 0,
+        ignored: recent.filter((item) => item.state === 'ignored').length,
+      },
+      queue: {
+        depth: lines.length,
+        lagSeconds: lines.length > 0 ? Math.max(0, Math.floor((Date.parse(observedAt) - queueStat.mtime.getTime()) / 1000)) : null,
+      },
+      consumer: {
+        state: 'unknown',
+        detail: lines.length > 0
+          ? 'Queue file has pending entries; consumer completion is not inferred by the read-only dashboard.'
+          : 'Queue file observed empty; delivery acceptance and consumer completion require ingress instrumentation.',
+      },
+      recent,
+      notes: [
+        'Webhook events are request signals only.',
+        'Dashboard status is read-only and cannot replay, forge, dispatch, or mutate webhook events.',
+        'Signature acceptance/refusal counts are not inferred from queue file contents.',
+      ],
+    };
+  } catch (err) {
+    const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: unknown }).code) : 'unknown_error';
+    const missing = code === 'ENOENT';
+    return webhookQueueUnavailable(
+      missing ? 'not_configured' : 'unknown',
+      missing ? 'not_configured' : 'blocked',
+      missing
+        ? 'Linear webhook queue file was not found at the configured path.'
+        : 'Linear webhook queue file could not be inspected by the read-only dashboard.',
+      [`queue_inspection_${code}`],
+    );
+  }
+}
+
+function webhookQueueUnavailable(
+  state: RunnerWebhookQueueHealth['state'],
+  consumerState: RunnerWebhookQueueHealth['consumer']['state'],
+  detail: string,
+  notes: string[],
+): RunnerWebhookQueueHealth {
   return {
-    ok: true,
-    state: 'not_configured',
+    ok: false,
+    state,
     lastValidDelivery: null,
     lastInvalidSignature: null,
     counts: {
@@ -750,15 +829,62 @@ function defaultWebhookQueueHealth(): RunnerWebhookQueueHealth {
       lagSeconds: null,
     },
     consumer: {
-      state: 'not_configured',
-      detail: 'Linear webhook events are not configured as Runner authority in this deployment.',
+      state: consumerState,
+      detail,
     },
     recent: [],
-    notes: [
-      'Webhook events are request signals only.',
-      'Dashboard status is read-only and cannot replay, forge, or dispatch events.',
-    ],
+    notes,
   };
+}
+
+function parseWebhookQueueLine(
+  line: string,
+  fallbackObservedAt: string,
+): RunnerWebhookQueueHealth['recent'][number] | null {
+  try {
+    const record = asRecord(JSON.parse(line));
+    if (!record) return null;
+    const issueRecord = asRecord(record.issue);
+    const eventType = stringValue(record.eventClass)
+      || [stringValue(record.type), stringValue(record.action)].filter(Boolean).join('.')
+      || 'queued_event';
+    const state = stringValue(record.state) || stringValue(record.status) || 'queued';
+    const reason = stringValue(record.reason);
+    const observed = stringValue(record.observedAt)
+      || stringValue(record.createdAt)
+      || stringValue(record.timestamp)
+      || fallbackObservedAt;
+    const issueKey = stringValue(record.issueKey)
+      || stringValue(record.identifier)
+      || stringValue(issueRecord?.identifier)
+      || issueKeyFromText(stringValue(record.title) || stringValue(issueRecord?.title) || '');
+    return {
+      observedAt: observed,
+      issueKey,
+      eventClass: safeSingleLine(eventType),
+      state: safeSingleLine(state),
+      ...(reason ? { reason: safeSingleLine(reason) } : {}),
+    };
+  } catch {
+    return {
+      observedAt: fallbackObservedAt,
+      eventClass: 'unparsed_queue_line',
+      state: 'queued',
+      reason: 'queue line was not JSON',
+    };
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function safeSingleLine(value: string): string {
+  return value.split('\n')[0]?.trim() || 'unknown';
+}
+
+function issueKeyFromText(value: string): string | undefined {
+  return value.match(/\b[A-Z]+-\d+\b/)?.[0];
 }
 
 function runPythonJson(args: string[], cwd: string, timeout = DEFAULT_TIMEOUT_MS): Promise<CommandResult> {
@@ -1764,6 +1890,7 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
   const liveEvidenceRoot = process.env.RUNNERD_EVIDENCE_ROOT?.trim() || DEFAULT_RUNNERD_EVIDENCE_ROOT;
   const liveWorktreeRoot = process.env.RUNNERD_WORKTREE_ROOT?.trim() || DEFAULT_RUNNERD_WORKTREE_ROOT;
   const liveEvidencePath = process.env.RUNNERD_LIVE_EVIDENCE_PATH?.trim();
+  const webhookQueue = await collectWebhookQueueHealth(observedAt);
   const liveReadinessArgs = liveEvidencePath
     ? ['-m', 'runnerd.cli', 'live-readiness', '--live-evidence', liveEvidencePath, '--json']
     : ['-m', 'runnerd.cli', 'live-readiness', '--json'];
@@ -1781,7 +1908,7 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
       liveReadiness: null,
       authoritySnapshot: null,
       work: null,
-      webhookQueue: defaultWebhookQueueHealth(),
+      webhookQueue,
       autonomy: {
         state: 'offline',
         label: 'Runner offline',
@@ -1875,7 +2002,7 @@ async function collectRunnerStatusFresh(): Promise<RunnerStatusReport> {
     liveReadiness: liveReadinessRecord,
     authoritySnapshot: authoritySnapshotRecord,
     work: runnerWork,
-    webhookQueue: defaultWebhookQueueHealth(),
+    webhookQueue,
     autonomyView: deriveAutonomyView(statusRecord, liveReadinessRecord, authoritySnapshotRecord, runnerWork),
     autonomy: deriveAutonomy(statusRecord, scanRecord, liveReadinessRecord, runnerWork, dispatchEnabled),
     liveDbPath,
